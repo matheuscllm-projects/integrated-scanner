@@ -164,7 +164,8 @@ def sale_margin_pct(ref_brl: float, compra_brl: float) -> Optional[float]:
     de 30%. None quando falta preço (nunca devolve margem calculada com zero)."""
     if not _valid_prices(ref_brl, compra_brl):
         return None
-    return (ref_brl - compra_brl) / ref_brl * 100.0
+    # round(…, 9): tira ruído de float (ref 1.9/compra 1.33 dava 29.999999999999993)
+    return round((ref_brl - compra_brl) / ref_brl * 100.0, 9)
 
 
 def floor_pct(value: float, decimals: int = 1) -> float:

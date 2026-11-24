@@ -106,3 +106,16 @@ def test_api_store_and_filter_use_sale_margin():
     assert rows["High"]["roi_aquisicao_pct"] == pytest.approx(66.667, abs=1e-2)
     assert "margem_pct" not in rows["High"]
     assert rows["Low"]["bucket"].startswith("Abaixo do corte")
+
+
+@pytest.mark.parametrize("ref,compra", [(1.9, 1.33), (2.3, 1.61)])
+def test_exact_30_percent_passes_float_noise(ref, compra):
+    d = deal(compra, ref)
+    assert filter_deals([d], 30.0) == [d]
+    assert bucket_for(d, 30.0) == "Deals limpos — referência real"
+
+
+def test_roi_33_margin_25_still_fails():
+    d = deal(75.0, 100.0)
+    assert filter_deals([d], 30.0) == []
+    assert bucket_for(d, 30.0) == "Abaixo do corte — diagnóstico"
