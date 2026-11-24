@@ -277,6 +277,80 @@ def compute_valorization(rarity: Optional[str],
 
 
 # ══════════════════════════════════════════════════════════════════════
+# CONTRATOS DE ENTRADA — arquivo identificado pelo CONTEÚDO, nunca pelo nome.
+# Cada fonte tem colunas/chaves obrigatórias; arquivo que não as tem é REJEITADO
+# com mensagem clara (SourceFormatError) e nunca vira dado. Antes, um relatório
+# processado do postprocess era lido como scan cru: `_col("TCG Market (BRL)")`
+# devolvia vazio, a referência virava 0 e saíam linhas sem sentido, em silêncio.
+# ══════════════════════════════════════════════════════════════════════
+
+class SourceFormatError(ValueError):
+    """Arquivo de entrada não cumpre o contrato da fonte (nunca vira dado)."""
+
+
+CT_RAW_REQUIRED = ("Card Name", "Set", "Scan R$ (raw)", "TCG Market (BRL)",
+                   "TCG Market (USD)", "Link CardTrader")
+CT_RAW_SHEET = "Oportunidades"
+MYP_REQUIRED = ("Card Name", "Edition", "MYP EN NM (R$)", "TCG Player (R$)", "URL")
+MYP_SHEET = "All EN Cards"
+COMC_REQUIRED = ("card", "set", "comc_price", "tcg_reference", "comc_url")
+LIGA_REQUIRED = ("card_name", "set_name", "price_liga_brl", "price_tcg_brl", "liga_url")
+
+# Colunas que só o RELATÓRIO PROCESSADO do postprocess do CT tem (diagnóstico).
+_CT_PROCESSED_MARKERS = ("Preço CT (R$)", "TCG (R$)")
+
+
+def _missing_columns(columns, required) -> list[str]:
+    have = {str(c).strip().casefold() for c in columns}
+    return [c for c in required if c.casefold() not in have]
+
+
+def _find_sheet(path: Path, required, label: str, preferred: str = "") -> str:
+    """Nome da primeira aba (preferida primeiro) com TODAS as colunas obrigatórias.
+    Nenhuma → SourceFormatError dizendo o que faltou em cada aba."""
+    import pandas as pd
+    try:
+        book = pd.ExcelFile(path)
+    except Exception as exc:  # noqa: BLE001 — arquivo ilegível também é rejeição visível
+        raise SourceFormatError(f"{Path(path).name}: não foi possível abrir como XLSX "
+                                f"({type(exc).__name__}: {exc})") from exc
+    with book:
+        names = list(book.sheet_names)
+        order = ([preferred] if preferred in names else []) + [n for n in names if n != preferred]
+        report, seen_columns = [], set()
+        for name in order:
+            cols = list(pd.read_excel(book, sheet_name=name, nrows=0).columns)
+            seen_columns.update(str(c) for c in cols)
+            missing = _missing_columns(cols, required)
+            if not missing:
+                return name
+            report.append(f"aba '{name}': faltam " + ", ".join(f"'{m}'" for m in missing))
+    hint = ""
+    if all(m in seen_columns for m in _CT_PROCESSED_MARKERS):
+        hint = (" Parece um relatório processado do postprocess (relatório, não scan cru): "
+                "não é lido como scan.")
+    raise SourceFormatError(
+        f"{Path(path).name}: não é um {label} (nenhuma aba tem as colunas obrigatórias). "
+        + "; ".join(report) + "." + hint)
+
+
+def _require_keys(rows: list[dict], required, label: str, name: str) -> None:
+    keys = {k for r in rows if isinstance(r, dict) for k in r}
+    missing = [k for k in required if k not in keys]
+    if missing:
+        raise SourceFormatError(f"{name}: não é um {label}: nenhuma linha tem as chaves "
+                                + ", ".join(f"'{m}'" for m in missing) + ".")
+
+
+def _flag_missing_prices(deal: "Deal") -> None:
+    """Preço ausente/zero nunca vira margem: a linha fica explicitamente marcada."""
+    if deal.ref_brl <= 0:
+        deal.review_reasons.append("sem referência de preço — margem não calculada")
+    if deal.compra_brl <= 0:
+        deal.review_reasons.append("sem preço de compra — margem não calculada")
+
+
+# ══════════════════════════════════════════════════════════════════════
 # ROW MAPPERS — um por fonte. Recebem a linha como dict (testável sem xlsx).
 # ══════════════════════════════════════════════════════════════════════
 
@@ -341,6 +415,7 @@ def ct_row_to_deal(row: dict[str, Any], fx_global: float) -> Deal:
     if deal.validation_status not in {"VALIDATED_REAL", "VALIDATED_MARKUP"}:
         deal.review_reasons.append("oferta CT sem validação atual: " + (deal.validation_status or "não informada"))
     _flag_notorious(deal)
+    _flag_missing_prices(deal)
     return deal
 
 
@@ -464,6 +539,7 @@ def myp_row_to_deal(row: dict[str, Any], fx_global: float) -> Deal:
             deal.notas.append(f"alerta {label}: {value}")
             deal.review_reasons.append(f"{label}: {value}")
     _flag_notorious(deal)
+    _flag_missing_prices(deal)
     return deal
 
 
@@ -510,6 +586,7 @@ def comc_row_to_deal(row: dict[str, Any], fx_global: float) -> Deal:
     if conf:
         deal.notas.append(f"match conf {conf:.2f}")
     _flag_notorious(deal)
+    _flag_missing_prices(deal)
     return deal
 
 
@@ -544,6 +621,7 @@ def liga_row_to_deal(row: dict[str, Any], fx_global: float) -> Deal:
     deal.validation_status = _clean_str(row.get("status"))
     deal.price_source = _clean_str(row.get("price_source"))
     _flag_notorious(deal)
+    _flag_missing_prices(deal)
     return deal
 
 
@@ -589,18 +667,29 @@ REPOS = {
 }
 
 
+def _newest_conforming(candidates, required, label: str, preferred: str) -> Optional[Path]:
+    """Mais novo arquivo que cumpre o CONTRATO de conteúdo; o nome não conta."""
+    for p in sorted(candidates, key=lambda p: p.stat().st_mtime, reverse=True):
+        try:
+            _find_sheet(p, required, label, preferred)
+        except SourceFormatError:
+            continue
+        return p
+    return None
+
+
 def latest_ct_output(repo: Path = REPOS["ct"]) -> Optional[Path]:
-    """xlsx RAW mais recente (ignora *_post.xlsx, que é o relatório CT)."""
-    candidates = [p for p in (repo / "outputs").glob("*.xlsx")
-                  if "_post" not in p.stem]
-    return max(candidates, key=lambda p: p.stat().st_mtime) if candidates else None
+    """xlsx de scan CRU mais recente, reconhecido pelo conteúdo (abas/colunas
+    obrigatórias), não pelo nome: relatório processado nunca é escolhido."""
+    return _newest_conforming((repo / "outputs").glob("*.xlsx"), CT_RAW_REQUIRED,
+                              "scan cru do CardTrader", CT_RAW_SHEET)
 
 
 def latest_myp_output(repo: Path = REPOS["myp"]) -> Optional[Path]:
     candidates = list((repo / "results").glob("*.xlsx"))
     candidates += list(repo.glob("myp_arbitrage_*.xlsx"))
     candidates = [p for p in candidates if not p.name.endswith(".bak")]
-    return max(candidates, key=lambda p: p.stat().st_mtime) if candidates else None
+    return _newest_conforming(candidates, MYP_REQUIRED, "resultado do MYP", MYP_SHEET)
 
 
 def latest_comc_outputs(repo: Path = REPOS["comc"]) -> list[Path]:
@@ -637,21 +726,28 @@ def comc_run_summaries(repo: Path = REPOS["comc"]) -> dict[str, dict]:
 
 def read_ct(path: Path, fx_global: float) -> list[Deal]:
     import pandas as pd
-    df = pd.read_excel(path)
+    sheet = _find_sheet(Path(path), CT_RAW_REQUIRED, "scan cru do CardTrader", CT_RAW_SHEET)
+    df = pd.read_excel(path, sheet_name=sheet)
     return [ct_row_to_deal(row, fx_global) for row in df.to_dict("records")]
 
 
 def read_myp(path: Path, fx_global: float) -> list[Deal]:
     import pandas as pd
-    with pd.ExcelFile(path) as book:
-        sheet = "All EN Cards" if "All EN Cards" in book.sheet_names else book.sheet_names[0]
-        df = pd.read_excel(book, sheet_name=sheet)
+    sheet = _find_sheet(Path(path), MYP_REQUIRED, "resultado do MYP", MYP_SHEET)
+    df = pd.read_excel(path, sheet_name=sheet)
     return [myp_row_to_deal(row, fx_global) for row in df.to_dict("records")]
 
 
 def read_comc(path: Path, fx_global: float) -> list[Deal]:
     import pandas as pd
-    df = pd.read_csv(path)
+    try:
+        df = pd.read_csv(path)
+    except pd.errors.EmptyDataError as exc:
+        raise SourceFormatError(f"{Path(path).name}: CSV do COMC vazio (sem cabeçalho).") from exc
+    missing = _missing_columns(df.columns, COMC_REQUIRED)
+    if missing:
+        raise SourceFormatError(f"{Path(path).name}: não é um CSV do COMC: faltam "
+                                + ", ".join(f"'{m}'" for m in missing) + ".")
     return [comc_row_to_deal(row, fx_global) for row in df.to_dict("records")]
 
 
@@ -664,7 +760,15 @@ def read_liga(path: Path, fx_global: float) -> list[Deal]:
     R$0,08 a "487%" — rejected na fonte, exibida aqui). Piso é invariante
     POR FONTE; o integrado respeita o veredito dela."""
     import json
-    rows = json.loads(path.read_text(encoding="utf-8"))
+    try:
+        rows = json.loads(path.read_text(encoding="utf-8"))
+    except (json.JSONDecodeError, UnicodeDecodeError) as exc:
+        raise SourceFormatError(f"{path.name}: JSON da Liga ilegível ({exc}).") from exc
+    if not isinstance(rows, list) or any(not isinstance(r, dict) for r in rows):
+        raise SourceFormatError(f"{path.name}: report da Liga deve ser uma lista de linhas "
+                                f"(objetos); veio {type(rows).__name__}.")
+    if rows:
+        _require_keys(rows, LIGA_REQUIRED, "report da Liga", path.name)
     deals = [liga_row_to_deal(row, fx_global) for row in rows]
     for deal in deals:
         if deal.validation_status != "approved":

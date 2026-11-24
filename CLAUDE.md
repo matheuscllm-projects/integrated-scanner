@@ -128,6 +128,19 @@ python -m uvicorn api:app --host 127.0.0.1 --port 8077
 myp_max_products e myp_delay_s. COMC exige allow_comc; Liga exige collect_liga.
 O store mantém todos os baldes. Nenhuma publicação externa é feita pelo scanner.
 
+**Arquivos de entrada são identificados pelo CONTEÚDO, nunca pelo nome.** Cada leitor exige
+colunas/chaves obrigatórias: CT = scan cru (aba `Oportunidades`; colunas `Card Name`, `Set`,
+`Scan R$ (raw)`, `TCG Market (BRL)`, `TCG Market (USD)`, `Link CardTrader`), MYP = `Card Name`,
+`Edition`, `MYP EN NM (R$)`, `TCG Player (R$)`, `URL`; COMC = `card`, `set`, `comc_price`,
+`tcg_reference`, `comc_url`; Liga = lista JSON com `card_name`, `set_name`, `price_liga_brl`,
+`price_tcg_brl`, `liga_url`. Arquivo que não cumpre o contrato é REJEITADO com mensagem que
+diz o que faltou (`SourceFormatError`; a fonte fica `falhou (normalização)` com a causa) e
+nunca vira dado. Em especial, um relatório processado do postprocess do CT (aba `Deals`,
+colunas `Preço CT (R$)`/`TCG (R$)`) jamais é lido como scan cru. Os localizadores
+`latest_ct_output`/`latest_myp_output` também escolhem por conteúdo. Linha individual sem preço
+de compra ou sem referência continua na tabela, marcada "sem referência", sem margem, e o
+status da fonte conta quantas foram.
+
 Reprocessamento técnico explícito, **sem tratar como coleta atual**:
 
 ```powershell

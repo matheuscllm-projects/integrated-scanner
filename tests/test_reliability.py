@@ -164,8 +164,9 @@ def test_myp_preserves_real_usd_and_source_fx():
 def test_myp_reads_all_cards_including_below_cutoff_once(tmp_path):
     from normalize import read_myp
     path = tmp_path/'myp.xlsx'
-    rows = [{'Card Name': 'Above', 'MYP EN NM (R$)': 50, 'TCG Player (R$)': 100},
-            {'Card Name': 'Below', 'MYP EN NM (R$)': 90, 'TCG Player (R$)': 100}]
+    base = {'Edition': 'SV: X', 'URL': 'https://example.org/myp'}   # colunas do contrato MYP
+    rows = [dict(base, **{'Card Name': 'Above', 'MYP EN NM (R$)': 50, 'TCG Player (R$)': 100}),
+            dict(base, **{'Card Name': 'Below', 'MYP EN NM (R$)': 90, 'TCG Player (R$)': 100})]
     with pd.ExcelWriter(path) as writer:
         pd.DataFrame(rows[:1]).to_excel(writer, sheet_name='🔥 Deals', index=False)
         pd.DataFrame(rows).to_excel(writer, sheet_name='All EN Cards', index=False)

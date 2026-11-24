@@ -598,6 +598,11 @@ def main() -> int:
                         "integrado SEM --skip-scan, ou aponte --liga-report pra um "
                         "report gerado de CSV real (reports MOCK não entram)")
             status_obj.deals_raw = len(src_deals)
+            no_price = sum(1 for d in src_deals if d.ref_brl <= 0 or d.compra_brl <= 0)
+            if no_price:  # nunca margem com zero: a linha fica, marcada, e o status avisa
+                status_obj.detail = "; ".join(filter(None, [
+                    status_obj.detail,
+                    f"{no_price} linha(s) sem preço de compra/referência — margem não calculada"]))
             for deal in src_deals:
                 if status_obj.status.startswith("parcial"):
                     deal.review_reasons.append("coleta parcial — cobertura incompleta")
