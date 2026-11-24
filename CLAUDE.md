@@ -65,7 +65,7 @@ COMC/Liga precisam de validação específica no ambiente de navegador do operad
 
 ## Formato MyP Cards
 
-A tabela compacta apresenta número da linha, fonte, margem, compra R$,
+A tabela compacta apresenta número da linha, fonte, margem venda %, ROI aquisição %, compra R$,
 referência US$/R$, diferença R$, carta com número, set, raridade, condição,
 quantidade, flags e os dois links. O preço de referência é clicável.
 Não substituir preço ou evidência ausente por zero, busca genérica ou outra carta.
@@ -84,9 +84,21 @@ match único, referência da versão mais barata) vai para Validar manualmente.
 CT preserva variante, idioma, condição, procedência, horário e validação.
 Linhas CT não validadas não viram deals limpos por passar apenas no corte numérico.
 
-As fórmulas originais das fontes não mudam: MYP usa 30% sobre a compra;
-CT usa 0,30 sobre a referência. O integrado recalcula `(referência-compra)/compra`.
-30% sobre a referência equivale a 42,86% sobre a compra. CT também exporta
+**Margem e ROI (decisão do dono, padrão do ecossistema):** o integrado recalcula tudo dos
+preços da linha, com UMA função (`normalize.sale_margin_pct`). **Margem sobre a venda =
+`(referência − compra) / referência`** e é a única base do corte de 30% (coluna
+"Margem venda %"). **ROI sobre a aquisição = `(referência − compra) / compra`** é uma
+métrica SEPARADA (coluna "ROI aquisição %"), só informativa, nunca no corte: 30% de margem
+sobre a venda equivale a 42,86% de ROI, e 30% de ROI equivale a só 23,08% de margem.
+Ex.: compra 75, referência 100 → ROI 33,3%, margem 25%: NÃO passa o corte. Preço de compra
+ou referência ausente/zero → sem número ("—") e bucket "Rejeitados / sem referência",
+nunca margem calculada com zero. As fontes mantêm seus cortes próprios, registrados por
+fonte no resumo ("corte de origem"): MYP e Liga 30% sobre a venda (MYP #107 e Liga #59 mudaram a base na origem);
+CT 30% sobre a venda (`--threshold 0.30`, fração; igual ao do integrado); COMC
+`MIN_DISCOUNT_PERCENT = 20`, inteiro, sobre a venda (o integrado passa `--min-discount 20`
+explícito, pois a variável de ambiente do COMC poderia apertá-lo sem ele saber). Todos
+são iguais ou mais frouxos que 30% sobre a venda, portanto nada que passa aqui é perdido
+na fonte; o integrado reaplica o corte sobre a venda. CT também exporta
 linhas abaixo do seu corte, que permanecem identificadas e sem validação automática.
 Nenhuma taxa é embutida. Diferença bruta não é lucro líquido.
 O USD original e o câmbio implícito do MYP/CT são preservados.
@@ -108,7 +120,18 @@ STALE, API_ERROR e PRICE_CHANGED ficam fora da escolha de menor preço.
 ## Falhas, API e releitura histórica
 
 Cada fonte mantém erro, log e horário. Nenhuma falha cai no último XLSX antigo.
-Saída 0 = sucesso; 2 = parcial; 1 = falha/indisponibilidade total.
+Status por fonte (o resumo e `run_status` da API repetem a frase `Código de saída N — ...`):
+`ok` (arquivo válido com linhas com preço) · `ok (fonte sem linhas)` (arquivo válido e vazio:
+a fonte não trouxe nada, não é falha) · `sem cobertura (...)` (há linhas, mas nenhuma com
+referência e preço de compra, ou câmbio ausente: NÃO é ok) · `parcial (N de M linhas ...)`
+(parte das linhas sem referência/compra ou fora do contrato) · `falhou`/`timeout`/`indisponível`.
+Saída 0 = todas as fontes ativas ok (inclui "fonte sem linhas"); 2 = alguma fonte falhou,
+ficou sem cobertura ou parcial, mas ao menos uma está ok; 1 = nenhuma fonte ok.
+Nunca 0 com fonte falha ou sem cobertura. `GET /deals` responde 409 pedindo novo scan se o
+store tiver outro `schema_version`, e informa `sem_margem` (linhas sem margem não passam
+em filtro de margem e vão ao fim). Margem é exibida arredondada para BAIXO (29,96% nunca
+vira 30,0%). Sem câmbio (`--skip-scan` sem `--fx`) o COMC fica "câmbio ausente", nunca
+calculado com câmbio 0 nem cotação presumida.
 A API reflete `done`, `partial` ou `failed`; `/status` informa modo e limite diagnóstico.
 
 ```powershell
@@ -120,6 +143,19 @@ python -m uvicorn api:app --host 127.0.0.1 --port 8077
 myp_max_products e myp_delay_s. COMC exige allow_comc; Liga exige collect_liga.
 O store mantém todos os baldes. Nenhuma publicação externa é feita pelo scanner.
 
+**Arquivos de entrada são identificados pelo CONTEÚDO, nunca pelo nome.** Cada leitor exige
+colunas/chaves obrigatórias: CT = scan cru (aba `Oportunidades`; colunas `Card Name`, `Set`,
+`Scan R$ (raw)`, `TCG Market (BRL)`, `TCG Market (USD)`, `Link CardTrader`), MYP = `Card Name`,
+`Edition`, `MYP EN NM (R$)`, `TCG Player (R$)`, `URL`; COMC = `card`, `set`, `comc_price`,
+`tcg_reference`, `comc_url`; Liga = lista JSON com `card_name`, `set_name`, `price_liga_brl`,
+`price_tcg_brl`, `liga_url`. Arquivo que não cumpre o contrato é REJEITADO com mensagem que
+diz o que faltou (`SourceFormatError`; a fonte fica `falhou (normalização)` com a causa) e
+nunca vira dado. Em especial, um relatório processado do postprocess do CT (aba `Deals`,
+colunas `Preço CT (R$)`/`TCG (R$)`) jamais é lido como scan cru. Os localizadores
+`latest_ct_output`/`latest_myp_output` também escolhem por conteúdo. Linha individual sem preço
+de compra ou sem referência continua na tabela, marcada "sem referência", sem margem, e o
+status da fonte conta quantas foram.
+
 Reprocessamento técnico explícito, **sem tratar como coleta atual**:
 
 ```powershell
@@ -129,6 +165,24 @@ python run_integrated.py --skip-scan --sources ct --ct-output caminho/arquivo.xl
 Para MYP use `--myp-output`; Liga aceita `--liga-report` proveniente de CSV real.
 A releitura fica marcada como histórica, tem escopo desconhecido e store separado;
 não substitui o store da coleta atual. Sem arquivo explícito, não procura o último.
+
+## Códigos de saída do scanner CardTrader
+
+`run_integrated.py` (`CT_EXIT`) lê assim, só para o CT (MYP/COMC/Liga seguem 0 ok, 2 parcial, resto falhou):
+
+| exit | significado | status | XLSX lido? |
+|---|---|---|---|
+| 0 | ok | ok | sim |
+| 1 | erro fatal | falhou | não |
+| 2 | argumentos/run-guard (nada escrito) | falhou | não |
+| 20 | validação de preço parcial (erro de API/moeda em algumas ofertas) | parcial | sim |
+| 21 | nenhum preço live válido | parcial | sim |
+| 22 | API de validação falhou em todas | parcial | sim |
+| 23 | scan concluído com set(s) em falha operacional | parcial | sim |
+| 130 | Ctrl-C | falhou | não |
+
+O XLSX só é lido se foi escrito neste passo (mtime >= início); senão vira "falhou: sem saída deste run".
+Linhas sem `VALIDATED_REAL/MARKUP` ganham `review_reasons` e nunca entram nos deals limpos.
 
 ## Desenvolvimento e verificação
 

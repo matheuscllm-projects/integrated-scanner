@@ -23,13 +23,13 @@ def client():
 def _sample_store() -> dict:
     deals = [
         Deal(fonte="MYP", carta="Sinistcha ex", set_name="SV06: Twilight Masquerade",
-             numero="210", raridade="Rara", margem_pct=95.2, compra_brl=89.0,
-             ref_brl=173.7, notas=["1 sellers NM"]),
+             numero="210", raridade="Rara", compra_brl=89.0,
+             ref_brl=200.0, notas=["1 sellers NM"]),
         Deal(fonte="MYP", carta="Salamence ex", set_name="SV09: Journey Together",
-             numero="187", margem_pct=31.9, compra_brl=279.8, ref_brl=368.96,
+             numero="187", compra_brl=279.8, ref_brl=368.96,
              notorio="⭐ Salamence"),
         Deal(fonte="CT", carta="Dusclops", set_name="sfa", numero="069",
-             margem_pct=40.0, compra_usd=10.0, ref_usd=14.0),
+             compra_brl=50.0, ref_brl=70.0, compra_usd=10.0, ref_usd=14.0),
     ]
     statuses = [
         SourceStatus(source="MYP", status="ok", deals_raw=2, deals_kept=2),
@@ -89,7 +89,7 @@ def test_deals_all(client, seeded):
     body = r.json()
     assert body["count"] == 3
     # ordenado por margem desc
-    margins = [d["margem_pct"] for d in body["deals"]]
+    margins = [d["margem_venda_pct"] for d in body["deals"]]
     assert margins == sorted(margins, reverse=True)
 
 
@@ -104,11 +104,11 @@ def test_deals_filter_source_real_pipeline_labels(client, monkeypatch):
     qualquer store de produção. O mapa _FONTE_TO_KEY conserta isso."""
     deals = [
         Deal(fonte="CardTrader", carta="Dusclops", set_name="Shrouded Fable",
-             numero="069", margem_pct=40.0),
+             numero="069", compra_brl=60.0, ref_brl=100.0),
         Deal(fonte="MYP", carta="Sinistcha ex", set_name="SV06: Twilight Masquerade",
-             numero="210", margem_pct=95.2),
+             numero="210", compra_brl=40.0, ref_brl=100.0),
         Deal(fonte="Liga", carta="Umbreon ex", set_name="Prismatic Evolutions",
-             margem_pct=33.0),
+             compra_brl=67.0, ref_brl=100.0),
     ]
     store = api_store.build_store(
         deals, [SourceStatus(source="CT", status="ok")],
@@ -123,7 +123,7 @@ def test_deals_filter_source_real_pipeline_labels(client, monkeypatch):
 
 def test_deals_filter_min_margin(client, seeded):
     r = client.get("/deals", params={"min_margin": 50})
-    assert r.json()["count"] == 1  # só Sinistcha 95.2
+    assert r.json()["count"] == 1  # só Sinistcha (margem venda 55,5%)
 
 
 def test_deals_filter_notorious(client, seeded):

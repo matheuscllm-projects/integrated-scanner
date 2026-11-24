@@ -88,3 +88,12 @@ def test_scan_comc_no_coverage_status(tmp_path, monkeypatch):
     st, det, _, outs = run_integrated.scan_comc(object(), "s", 5)
     assert st == "sem cobertura" and det.startswith("recent: COMC não cobre os sets pedidos")
     assert outs == []
+
+
+def test_comc_cmd_has_explicit_integer_min_discount_accepted_by_real_parser():
+    cmd = run_integrated._comc_cmd("recent", None)
+    i = cmd.index("--min-discount")
+    assert cmd[i + 1] == str(run_integrated.COMC_MIN_DISCOUNT_PERCENT)
+    args = _real_parser().parse_args(cmd[cmd.index("comc_scanner") + 1:])
+    assert args.min_discount == run_integrated.COMC_MIN_DISCOUNT_PERCENT
+    assert "targeted" not in cmd and "--fetch-mode" not in cmd and "--no-sheets" not in cmd

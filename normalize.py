@@ -5,20 +5,24 @@ diferentes). Este módulo traduz tudo pra UMA tabela com as mesmas colunas.
 
 DECISÕES DE DESIGN (documentadas porque as fontes divergem):
 
-1. MARGEM BRUTA UNIFICADA = (revenda − compra) / compra, em PERCENT.
-   "Revenda" = preço de referência no TCGPlayer; "compra" = preço na fonte.
-   Por que recomputar? Cada scanner usa uma base diferente:
-     - MYP e Liga dividem pela COMPRA  (lucro sobre o capital investido)
-     - CardTrader e COMC dividem pela REVENDA
-   Dividir pela compra é a leitura mais intuitiva ("ganho X% sobre o que
-   paguei") e é matematicamente ≥ à margem-sobre-revenda — ou seja, nenhum
-   deal que passou no threshold de 30% da própria fonte é descartado aqui.
+1. MARGEM SOBRE A VENDA = (referência − compra) / referência, em PERCENT.
+   "Referência" = preço de mercado no TCGPlayer; "compra" = preço na fonte.
+   É a ÚNICA base do corte de 30% (decisão do dono: padronizar sobre a venda).
+   ROI sobre a aquisição = (referência − compra) / compra é uma métrica
+   SEPARADA (`roi_pct` / coluna "ROI aquisição %"), exibida à parte e NUNCA
+   usada no corte: 30% de margem sobre a venda ≠ 30% de ROI (equivale a
+   42,86% de ROI). Cada scanner usa uma base diferente (MYP e Liga: compra;
+   CardTrader e COMC: venda), por isso recomputamos aqui dos preços brutos.
+   Os dois números são sempre DERIVADOS dos preços da linha (propriedades de
+   `Deal`), nunca armazenados à parte — não há como divergirem do preço.
+   Preço de compra ou referência ausente/zero → None ("sem referência"),
+   nunca uma margem calculada com zero.
 
 2. FX (câmbio USD→BRL) é EXPLÍCITO por linha (coluna FX):
      - CardTrader: implícito na própria linha (TCG BRL ÷ TCG USD)
      - Liga: coluna exchange_rate do report
-     - MYP e COMC: FX global (flag --fx; default = inferido do output mais
-       recente do CT, senão 5.20 documentado)
+     - MYP e COMC: FX global (flag --fx ou consulta nova). SEM câmbio não há
+       cotação presumida: COMC fica sem preço em R$, marcado "câmbio ausente"
 
 3. VALORIZAÇÃO (0-100): o CardTrader scanner v2.13 já emite o score; pra
    MYP/COMC/Liga replicamos AQUI a MESMA heurística (funções portadas de
@@ -42,12 +46,10 @@ from typing import Any, Optional
 
 from notorious import match_notorious
 
-FX_FALLBACK = 5.20  # último recurso, documentado; prefira --fx ou inferência CT
-
 UNIFIED_COLUMNS = [
     "Fonte", "Carta", "Set", "Nº", "Raridade", "Chase Tier", "Notório",
     "Compra (R$)", "Compra (US$)", "FX", "Ref TCG (R$)", "Ref TCG (US$)",
-    "Margem bruta %", "Lucro (R$)", "Qtd",
+    "Margem venda %", "ROI aquisição %", "Lucro (R$)", "Qtd",
     "Notas", "Link oferta", "Link TCG",
     "Variante", "Condição", "Idioma", "Fonte preço", "Status referência",
     "Validação", "Coletado em", "Revisão",
@@ -68,7 +70,6 @@ class Deal:
     fx: float = 0.0
     ref_brl: float = 0.0
     ref_usd: float = 0.0
-    margem_pct: float = 0.0      # percent, base = compra (ver docstring)
     lucro_brl: float = 0.0
     qtd: Optional[int] = None    # None = fonte não informa
     valorizacao: Optional[int] = None
@@ -83,8 +84,20 @@ class Deal:
     validation_status: str = ""
     scanned_at: str = ""
     review_reasons: list[str] = field(default_factory=list)
+    data_issue: str = ""         # "" | "cambio_ausente" | "chaves_ausentes" (conta no status da fonte)
+
+    @property
+    def margem_venda_pct(self) -> Optional[float]:
+        """Margem sobre a venda (percent) — a base do corte. None = sem preços."""
+        return sale_margin_pct(self.ref_brl, self.compra_brl)
+
+    @property
+    def roi_aquisicao_pct(self) -> Optional[float]:
+        """ROI sobre a aquisição (percent) — métrica separada, nunca no corte."""
+        return roi_pct(self.ref_brl, self.compra_brl)
 
     def to_row(self) -> dict[str, Any]:
+        margem, roi = self.margem_venda_pct, self.roi_aquisicao_pct
         return {
             "Fonte": self.fonte,
             "Carta": self.carta,
@@ -98,7 +111,8 @@ class Deal:
             "FX": round(self.fx, 3) if self.fx else "",
             "Ref TCG (R$)": round(self.ref_brl, 2),
             "Ref TCG (US$)": round(self.ref_usd, 2),
-            "Margem bruta %": round(self.margem_pct, 1),
+            "Margem venda %": floor_pct(margem) if margem is not None else "",
+            "ROI aquisição %": round(roi, 1) if roi is not None else "",
             "Lucro (R$)": round(self.lucro_brl, 2),
             "Qtd": self.qtd if self.qtd is not None else "—",
             "Notas": "; ".join(self.notas),
@@ -138,10 +152,34 @@ def _clean_str(value: Any) -> str:
     return "" if s.lower() == "nan" else s
 
 
-def gross_margin_pct(ref_brl: float, compra_brl: float) -> float:
-    """Margem bruta unificada: (revenda − compra)/compra ×100. Zero taxas."""
-    if compra_brl <= 0:
-        return 0.0
+def _valid_prices(ref_brl: float, compra_brl: float) -> bool:
+    return all(isinstance(v, (int, float)) and math.isfinite(v) and v > 0
+               for v in (ref_brl, compra_brl))
+
+
+def sale_margin_pct(ref_brl: float, compra_brl: float) -> Optional[float]:
+    """Margem sobre a VENDA: (referência − compra)/referência ×100. Zero taxas.
+
+    ÚNICA função de margem do ecossistema integrado; é ela que alimenta o corte
+    de 30%. None quando falta preço (nunca devolve margem calculada com zero)."""
+    if not _valid_prices(ref_brl, compra_brl):
+        return None
+    # round(…, 9): tira ruído de float (ref 1.9/compra 1.33 dava 29.999999999999993)
+    return round((ref_brl - compra_brl) / ref_brl * 100.0, 9)
+
+
+def floor_pct(value: float, decimals: int = 1) -> float:
+    """Arredonda para BAIXO (exibição): 29,96% nunca vira 30,0%, que contradiria o corte.
+    O round(…, 9) antes só tira ruído de float (40.0 calculado como 39.99999999)."""
+    scale = 10 ** decimals
+    return math.floor(round(value, 9) * scale) / scale
+
+
+def roi_pct(ref_brl: float, compra_brl: float) -> Optional[float]:
+    """ROI sobre a AQUISIÇÃO: (referência − compra)/compra ×100. Só informativo:
+    nunca entra no corte nem substitui a margem sobre a venda."""
+    if not _valid_prices(ref_brl, compra_brl):
+        return None
     return (ref_brl - compra_brl) / compra_brl * 100.0
 
 
@@ -246,6 +284,85 @@ def compute_valorization(rarity: Optional[str],
 
 
 # ══════════════════════════════════════════════════════════════════════
+# CONTRATOS DE ENTRADA — arquivo identificado pelo CONTEÚDO, nunca pelo nome.
+# Cada fonte tem colunas/chaves obrigatórias; arquivo que não as tem é REJEITADO
+# com mensagem clara (SourceFormatError) e nunca vira dado. Antes, um relatório
+# processado do postprocess era lido como scan cru: `_col("TCG Market (BRL)")`
+# devolvia vazio, a referência virava 0 e saíam linhas sem sentido, em silêncio.
+# ══════════════════════════════════════════════════════════════════════
+
+class SourceFormatError(ValueError):
+    """Arquivo de entrada não cumpre o contrato da fonte (nunca vira dado)."""
+
+
+CT_RAW_REQUIRED = ("Card Name", "Set", "Scan R$ (raw)", "TCG Market (BRL)",
+                   "TCG Market (USD)", "Link CardTrader")
+CT_RAW_SHEET = "Oportunidades"
+MYP_REQUIRED = ("Card Name", "Edition", "MYP EN NM (R$)", "TCG Player (R$)", "URL")
+MYP_SHEET = "All EN Cards"
+COMC_REQUIRED = ("card", "set", "comc_price", "tcg_reference", "comc_url")
+LIGA_REQUIRED = ("card_name", "set_name", "price_liga_brl", "price_tcg_brl", "liga_url")
+
+# Colunas que só o RELATÓRIO PROCESSADO do postprocess do CT tem (diagnóstico).
+# "Preço CT (R$)" é o nome antigo; o relatório atual diz "Preço CT validado (R$)" e
+# "Preço usado na conta (R$)". Qualquer um + "TCG (R$)" = processado.
+_CT_PROCESSED_MARKERS = ("Preço CT (R$)", "Preço CT validado (R$)", "Preço usado na conta (R$)")
+_CT_PROCESSED_TCG = "TCG (R$)"
+
+
+def _missing_columns(columns, required) -> list[str]:
+    have = {str(c).strip().casefold() for c in columns}
+    return [c for c in required if c.casefold() not in have]
+
+
+def _find_sheet(path: Path, required, label: str, preferred: str = "") -> str:
+    """Nome da primeira aba (preferida primeiro) com TODAS as colunas obrigatórias.
+    Nenhuma → SourceFormatError dizendo o que faltou em cada aba."""
+    import pandas as pd
+    try:
+        book = pd.ExcelFile(path)
+    except Exception as exc:  # noqa: BLE001 — arquivo ilegível também é rejeição visível
+        raise SourceFormatError(f"{Path(path).name}: não foi possível abrir como XLSX "
+                                f"({type(exc).__name__}: {exc})") from exc
+    with book:
+        names = list(book.sheet_names)
+        order = ([preferred] if preferred in names else []) + [n for n in names if n != preferred]
+        report, seen_columns = [], set()
+        for name in order:
+            cols = list(pd.read_excel(book, sheet_name=name, nrows=0).columns)
+            seen_columns.update(str(c) for c in cols)
+            missing = _missing_columns(cols, required)
+            if not missing:
+                return name
+            report.append(f"aba '{name}': faltam " + ", ".join(f"'{m}'" for m in missing))
+    hint = ""
+    if _CT_PROCESSED_TCG in seen_columns and any(m in seen_columns for m in _CT_PROCESSED_MARKERS):
+        hint = (" Parece um relatório processado do postprocess (relatório, não scan cru): "
+                "não é lido como scan.")
+    raise SourceFormatError(
+        f"{Path(path).name}: não é um {label} (nenhuma aba tem as colunas obrigatórias). "
+        + "; ".join(report) + "." + hint)
+
+
+def _require_keys(rows: list[dict], required, label: str, name: str) -> None:
+    keys = {k for r in rows if isinstance(r, dict) for k in r}
+    missing = [k for k in required if k not in keys]
+    if missing:
+        raise SourceFormatError(f"{name}: não é um {label}: nenhuma linha tem as chaves "
+                                + ", ".join(f"'{m}'" for m in missing) + ".")
+
+
+def _flag_missing_prices(deal: "Deal") -> None:
+    """Preço ausente/zero nunca vira margem: a linha fica explicitamente marcada."""
+    if deal.data_issue == "cambio_ausente":   # motivo já registrado: o problema é o câmbio
+        return
+    if deal.ref_brl <= 0:
+        deal.review_reasons.append("sem referência de preço — margem não calculada")
+    if deal.compra_brl <= 0:
+        deal.review_reasons.append("sem preço de compra — margem não calculada")
+
+
+# ══════════════════════════════════════════════════════════════════════
 # ROW MAPPERS — um por fonte. Recebem a linha como dict (testável sem xlsx).
 # ══════════════════════════════════════════════════════════════════════
 
@@ -284,7 +401,6 @@ def ct_row_to_deal(row: dict[str, Any], fx_global: float) -> Deal:
         fx=fx,
         ref_brl=ref_brl,
         ref_usd=ref_usd,
-        margem_pct=gross_margin_pct(ref_brl, compra_brl),
         lucro_brl=ref_brl - compra_brl,
         qtd=int(_num(_col(row, "Qtd"), 0)) or None,
         link_oferta=str(_col(row, "Link CardTrader") or ""),
@@ -310,7 +426,11 @@ def ct_row_to_deal(row: dict[str, Any], fx_global: float) -> Deal:
         deal.review_reasons.append("variante de baixa confiança na fonte")
     if deal.validation_status not in {"VALIDATED_REAL", "VALIDATED_MARKUP"}:
         deal.review_reasons.append("oferta CT sem validação atual: " + (deal.validation_status or "não informada"))
+    elif live <= 0:  # VALIDATED_* sem LIVE (ex.: API mudou): nunca presumir o raw como checkout
+        deal.review_reasons.append("preço de checkout não validado (LIVE ausente)")
+        deal.notas.append("margem sobre preço NÃO validado (Scan R$ raw, sem LIVE)")
     _flag_notorious(deal)
+    _flag_missing_prices(deal)
     return deal
 
 
@@ -387,7 +507,6 @@ def myp_row_to_deal(row: dict[str, Any], fx_global: float) -> Deal:
         fx=fx,
         ref_brl=ref_brl,
         ref_usd=ref_usd,
-        margem_pct=gross_margin_pct(ref_brl, compra_brl),
         lucro_brl=ref_brl - compra_brl,
         qtd=None,  # MYP não informa estoque da oferta mais barata
         valorizacao=score,
@@ -435,6 +554,7 @@ def myp_row_to_deal(row: dict[str, Any], fx_global: float) -> Deal:
             deal.notas.append(f"alerta {label}: {value}")
             deal.review_reasons.append(f"{label}: {value}")
     _flag_notorious(deal)
+    _flag_missing_prices(deal)
     return deal
 
 
@@ -444,8 +564,10 @@ def comc_row_to_deal(row: dict[str, Any], fx_global: float) -> Deal:
     compra_usd = _num(_col(row, "comc_price"))
     ref_usd = _num(_col(row, "tcg_reference"))
     fx = fx_global
-    compra_brl = compra_usd * fx
-    ref_brl = ref_usd * fx
+    no_fx = not (math.isfinite(fx) and fx > 0)
+    # Sem câmbio NÃO se calcula (nem se presume): R$ fica 0 = "sem preço", USD preservado.
+    compra_brl = 0.0 if no_fx else compra_usd * fx
+    ref_brl = 0.0 if no_fx else ref_usd * fx
     rarity = str(_col(row, "rarity") or "")
     name_raw = str(_col(row, "card") or "")
     carta = re.sub(r"\s*-\s*\d+[a-zA-Z]?/\d+\s*$", "", name_raw).strip()
@@ -462,13 +584,16 @@ def comc_row_to_deal(row: dict[str, Any], fx_global: float) -> Deal:
         fx=fx,
         ref_brl=ref_brl,
         ref_usd=ref_usd,
-        margem_pct=gross_margin_pct(ref_brl, compra_brl),
         lucro_brl=ref_brl - compra_brl,
+        data_issue="cambio_ausente" if no_fx else "",
         qtd=int(_num(_col(row, "quantity"), 0)) or None,
         valorizacao=score,
         link_oferta=str(_col(row, "comc_url") or ""),
         link_tcg=str(_col(row, "tcg_url") or ""),
     )
+    if no_fx:
+        deal.review_reasons.append("câmbio ausente — USD→BRL não calculado (informe --fx); "
+                                   "preço em R$ e margem indisponíveis")
     deal.notas.append(note)
     cond = _col(row, "condition")
     deal.condition = _clean_str(cond)
@@ -482,6 +607,7 @@ def comc_row_to_deal(row: dict[str, Any], fx_global: float) -> Deal:
     if conf:
         deal.notas.append(f"match conf {conf:.2f}")
     _flag_notorious(deal)
+    _flag_missing_prices(deal)
     return deal
 
 
@@ -502,7 +628,6 @@ def liga_row_to_deal(row: dict[str, Any], fx_global: float) -> Deal:
         fx=fx,
         ref_brl=ref_brl,
         ref_usd=ref_usd,
-        margem_pct=gross_margin_pct(ref_brl, compra_brl),
         lucro_brl=ref_brl - compra_brl,
         qtd=None,
         valorizacao=score,
@@ -517,6 +642,7 @@ def liga_row_to_deal(row: dict[str, Any], fx_global: float) -> Deal:
     deal.validation_status = _clean_str(row.get("status"))
     deal.price_source = _clean_str(row.get("price_source"))
     _flag_notorious(deal)
+    _flag_missing_prices(deal)
     return deal
 
 
@@ -562,18 +688,63 @@ REPOS = {
 }
 
 
-def latest_ct_output(repo: Path = REPOS["ct"]) -> Optional[Path]:
-    """xlsx RAW mais recente (ignora *_post.xlsx, que é o relatório CT)."""
-    candidates = [p for p in (repo / "outputs").glob("*.xlsx")
-                  if "_post" not in p.stem]
-    return max(candidates, key=lambda p: p.stat().st_mtime) if candidates else None
+@dataclass
+class Located:
+    """Arquivo escolhido por conteúdo + avisos sobre arquivos mais novos REJEITADOS
+    (nunca pulados em silêncio). `sheet` é a aba validada pelo contrato."""
+    path: Optional[Path] = None
+    sheet: str = ""
+    notes: list[str] = field(default_factory=list)
 
 
-def latest_myp_output(repo: Path = REPOS["myp"]) -> Optional[Path]:
+def _stamp(p: Path) -> str:
+    return datetime.fromtimestamp(p.stat().st_mtime).strftime("%Y-%m-%d %H:%M")
+
+
+def _locate_conforming(candidates, required, label: str, preferred: str) -> Located:
+    """Mais novo arquivo que cumpre o CONTRATO de conteúdo; o nome não conta.
+    Cada arquivo mais novo que o escolhido e rejeitado vira uma nota com o motivo."""
+    rejected: list[tuple[Path, str]] = []
+    for p in sorted(candidates, key=lambda p: p.stat().st_mtime, reverse=True):
+        try:
+            sheet = _find_sheet(p, required, label, preferred)
+        except SourceFormatError as exc:
+            rejected.append((p, str(exc)))
+            continue
+        notes = [f"{r.name} (de {_stamp(r)}) rejeitado, mais novo que o usado: {why} "
+                 f"→ usado {p.name} (de {_stamp(p)})" for r, why in rejected]
+        return Located(p, sheet, notes)
+    return Located(None, "", [f"{r.name} (de {_stamp(r)}) rejeitado: {why}" for r, why in rejected])
+
+
+def _warn_rejected(found: Located) -> Optional[Path]:
+    import warnings
+    for note in found.notes:
+        warnings.warn(note, UserWarning, stacklevel=3)
+    return found.path
+
+
+def locate_ct_output(repo: Path = REPOS["ct"]) -> Located:
+    """xlsx de scan CRU mais recente, reconhecido pelo conteúdo (abas/colunas
+    obrigatórias), não pelo nome: relatório processado nunca é escolhido."""
+    return _locate_conforming((repo / "outputs").glob("*.xlsx"), CT_RAW_REQUIRED,
+                              "scan cru do CardTrader", CT_RAW_SHEET)
+
+
+def locate_myp_output(repo: Path = REPOS["myp"]) -> Located:
     candidates = list((repo / "results").glob("*.xlsx"))
     candidates += list(repo.glob("myp_arbitrage_*.xlsx"))
     candidates = [p for p in candidates if not p.name.endswith(".bak")]
-    return max(candidates, key=lambda p: p.stat().st_mtime) if candidates else None
+    return _locate_conforming(candidates, MYP_REQUIRED, "resultado do MYP", MYP_SHEET)
+
+
+def latest_ct_output(repo: Path = REPOS["ct"]) -> Optional[Path]:
+    """Só o caminho; arquivo mais novo rejeitado emite UserWarning (use locate_* p/ as notas)."""
+    return _warn_rejected(locate_ct_output(repo))
+
+
+def latest_myp_output(repo: Path = REPOS["myp"]) -> Optional[Path]:
+    return _warn_rejected(locate_myp_output(repo))
 
 
 def latest_comc_outputs(repo: Path = REPOS["comc"]) -> list[Path]:
@@ -610,21 +781,28 @@ def comc_run_summaries(repo: Path = REPOS["comc"]) -> dict[str, dict]:
 
 def read_ct(path: Path, fx_global: float) -> list[Deal]:
     import pandas as pd
-    df = pd.read_excel(path)
+    sheet = _find_sheet(Path(path), CT_RAW_REQUIRED, "scan cru do CardTrader", CT_RAW_SHEET)
+    df = pd.read_excel(path, sheet_name=sheet)
     return [ct_row_to_deal(row, fx_global) for row in df.to_dict("records")]
 
 
 def read_myp(path: Path, fx_global: float) -> list[Deal]:
     import pandas as pd
-    with pd.ExcelFile(path) as book:
-        sheet = "All EN Cards" if "All EN Cards" in book.sheet_names else book.sheet_names[0]
-        df = pd.read_excel(book, sheet_name=sheet)
+    sheet = _find_sheet(Path(path), MYP_REQUIRED, "resultado do MYP", MYP_SHEET)
+    df = pd.read_excel(path, sheet_name=sheet)
     return [myp_row_to_deal(row, fx_global) for row in df.to_dict("records")]
 
 
 def read_comc(path: Path, fx_global: float) -> list[Deal]:
     import pandas as pd
-    df = pd.read_csv(path)
+    try:
+        df = pd.read_csv(path)
+    except pd.errors.EmptyDataError as exc:
+        raise SourceFormatError(f"{Path(path).name}: CSV do COMC vazio (sem cabeçalho).") from exc
+    missing = _missing_columns(df.columns, COMC_REQUIRED)
+    if missing:
+        raise SourceFormatError(f"{Path(path).name}: não é um CSV do COMC: faltam "
+                                + ", ".join(f"'{m}'" for m in missing) + ".")
     return [comc_row_to_deal(row, fx_global) for row in df.to_dict("records")]
 
 
@@ -637,8 +815,21 @@ def read_liga(path: Path, fx_global: float) -> list[Deal]:
     R$0,08 a "487%" — rejected na fonte, exibida aqui). Piso é invariante
     POR FONTE; o integrado respeita o veredito dela."""
     import json
-    rows = json.loads(path.read_text(encoding="utf-8"))
+    try:
+        rows = json.loads(path.read_text(encoding="utf-8"))
+    except (json.JSONDecodeError, UnicodeDecodeError) as exc:
+        raise SourceFormatError(f"{path.name}: JSON da Liga ilegível ({exc}).") from exc
+    if not isinstance(rows, list) or any(not isinstance(r, dict) for r in rows):
+        raise SourceFormatError(f"{path.name}: report da Liga deve ser uma lista de linhas "
+                                f"(objetos); veio {type(rows).__name__}.")
+    if rows:
+        _require_keys(rows, LIGA_REQUIRED, "report da Liga", path.name)
     deals = [liga_row_to_deal(row, fx_global) for row in rows]
+    for deal, row in zip(deals, rows):
+        absent = [k for k in LIGA_REQUIRED if k not in row]
+        if absent:  # basta UMA linha ter as chaves para passar o contrato: as outras são marcadas
+            deal.data_issue = "chaves_ausentes"
+            deal.review_reasons.append("linha sem chaves obrigatórias da fonte: " + ", ".join(absent))
     for deal in deals:
         if deal.validation_status != "approved":
             deal.review_reasons.append("rejeitada pela Liga: " + (deal.validation_status or "sem status"))
@@ -647,12 +838,12 @@ def read_liga(path: Path, fx_global: float) -> list[Deal]:
 
 def infer_fx_from_ct(repo: Path = REPOS["ct"]) -> Optional[float]:
     """FX implícito no output CT mais recente (mediana de TCG BRL ÷ TCG USD)."""
-    path = latest_ct_output(repo)
-    if not path:
+    found = locate_ct_output(repo)
+    if not found.path:
         return None
     try:
         import pandas as pd
-        df = pd.read_excel(path)
+        df = pd.read_excel(found.path, sheet_name=found.sheet)  # a aba que o contrato validou
         brl = df.get("TCG Market (BRL)")
         usd = df.get("TCG Market (USD)")
         if brl is None or usd is None:

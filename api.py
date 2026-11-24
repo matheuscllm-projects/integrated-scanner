@@ -77,8 +77,16 @@ def _now() -> str:
     return datetime.now(timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ")
 
 
+def _load() -> Optional[dict]:
+    """load_store com o erro de schema virado em HTTP 409 (conflito: precisa de novo scan)."""
+    try:
+        return api_store.load_store()
+    except api_store.StoreSchemaError as exc:
+        raise HTTPException(status_code=409, detail=str(exc))
+
+
 def _require_store() -> dict:
-    store = api_store.load_store()
+    store = _load()
     if store is None:
         raise HTTPException(
             status_code=404,
@@ -95,7 +103,11 @@ def health() -> dict:
 
 @app.get("/")
 def root() -> dict:
-    store = api_store.load_store()
+    store_error = None
+    try:
+        store = api_store.load_store()
+    except api_store.StoreSchemaError as exc:
+        store, store_error = None, str(exc)
     last = None
     if store:
         last = {"generated_utc": store.get("generated_utc"),
@@ -108,6 +120,7 @@ def root() -> dict:
         "endpoints": ["/health", "/sets", "/sources", "/deals", "/status",
                       "/scan (POST)", "/scan/{job_id}", "/docs"],
         "last_run": last,
+        "store_error": store_error,
     }
 
 
@@ -120,7 +133,7 @@ def sets() -> dict:
 @app.get("/sources")
 def sources() -> dict:
     """As 4 fontes + o status do último run (do store, se houver)."""
-    store = api_store.load_store()
+    store = _load()
     by_src = {s["source"].lower(): s for s in (store or {}).get("sources", [])}
     out = []
     for src in sorted(VALID_SOURCES):
@@ -144,7 +157,7 @@ def status() -> dict:
         "stamp": store.get("stamp"),
         "scope": store.get("scope"),
         "fx": store.get("fx"),
-        "min_margin_pct": store.get("min_margin_pct"),
+        "min_margem_venda_pct": store.get("min_margem_venda_pct"),
         "deal_count": store.get("deal_count"),
         "sources": store.get("sources", []),
         "run_status": store.get("run_status", "unknown"),
@@ -158,13 +171,13 @@ def status() -> dict:
 def deals(
     source: Optional[str] = Query(None, description="filtra por fonte (myp/ct/comc/liga)"),
     set_: Optional[str] = Query(None, alias="set", description="filtra por set canônico (PRE) ou nome"),
-    min_margin: Optional[float] = Query(None, description="margem bruta mínima (percent)"),
+    min_margin: Optional[float] = Query(None, description="margem bruta mínima SOBRE A VENDA (percent); ROI não entra"),
     notorious: bool = Query(False, description="só Pokémon notórios (⭐)"),
     q: Optional[str] = Query(None, description="busca por substring no nome da carta"),
     limit: int = Query(200, ge=1, le=2000, description="máximo de linhas"),
 ) -> dict:
     """Deals unificados do último run (store alimentado), com filtros. Ordenado
-    por margem bruta desc. NÃO recomenda compra — só ranqueia e flagea."""
+    por margem sobre a venda desc. NÃO recomenda compra — só ranqueia e flagea."""
     store = _require_store()
     rows = list(store.get("deals", []))
 
@@ -181,17 +194,22 @@ def deals(
         canon = {e["canonical"]: e["name"] for e in catalog()}
         key = canon.get(raw.upper(), raw).lower()
         rows = [d for d in rows if key in (d.get("set_name") or "").lower()]
-    if min_margin is not None:
-        rows = [d for d in rows if float(d.get("margem_pct") or 0) >= min_margin]
     if notorious:
         rows = [d for d in rows if (d.get("notorio") or "").strip()]
     if q:
         needle = q.strip().lower()
         rows = [d for d in rows if needle in (d.get("carta") or "").lower()]
 
-    rows.sort(key=lambda d: float(d.get("margem_pct") or 0), reverse=True)
+    # Linha sem margem (sem preço de compra/referência) nunca passa em filtro de margem
+    # e nunca é tratada como 0: vai para o fim da ordenação, e a resposta conta quantas são.
+    sem_margem = sum(1 for d in rows if d.get("margem_venda_pct") is None)
+    if min_margin is not None:
+        rows = [d for d in rows if d.get("margem_venda_pct") is not None
+                and d["margem_venda_pct"] >= min_margin]
+    rows.sort(key=lambda d: (d.get("margem_venda_pct") is None, -(d.get("margem_venda_pct") or 0.0)))
     return {
         "count": len(rows),
+        "sem_margem": sem_margem,
         "generated_utc": store.get("generated_utc"),
         "scope": store.get("scope"),
         "fx": store.get("fx"),
@@ -204,7 +222,7 @@ class ScanRequest(BaseModel):
     sets: str = Field("quick", description="escopo: códigos canônicos (PRE,SSP) ou profile (quick/full)")
     sources: list[str] = Field(default_factory=lambda: ["myp", "ct"],
                                description="fontes a rodar (headful comc/liga exigem opt-in)")
-    min_margin: float = Field(30.0, ge=0, allow_inf_nan=False, description="corte de margem bruta (percent)")
+    min_margin: float = Field(30.0, ge=0, allow_inf_nan=False, description="corte de margem bruta sobre a venda (percent)")
     ct_provider: Literal["tcgcsv", "pokemontcg", "justtcg"] = "tcgcsv"
     myp_provider: Literal["auto", "tcgcsv", "pokemontcg"] = "auto"
     myp_max_products: int = Field(0, ge=0, description="diagnóstico limitado por edição; 0 = todos")
