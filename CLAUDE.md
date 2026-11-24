@@ -166,6 +166,24 @@ Para MYP use `--myp-output`; Liga aceita `--liga-report` proveniente de CSV real
 A releitura fica marcada como histórica, tem escopo desconhecido e store separado;
 não substitui o store da coleta atual. Sem arquivo explícito, não procura o último.
 
+## Códigos de saída do scanner CardTrader
+
+`run_integrated.py` (`CT_EXIT`) lê assim, só para o CT (MYP/COMC/Liga seguem 0 ok, 2 parcial, resto falhou):
+
+| exit | significado | status | XLSX lido? |
+|---|---|---|---|
+| 0 | ok | ok | sim |
+| 1 | erro fatal | falhou | não |
+| 2 | argumentos/run-guard (nada escrito) | falhou | não |
+| 20 | validação de preço parcial (erro de API/moeda em algumas ofertas) | parcial | sim |
+| 21 | nenhum preço live válido | parcial | sim |
+| 22 | API de validação falhou em todas | parcial | sim |
+| 23 | scan concluído com set(s) em falha operacional | parcial | sim |
+| 130 | Ctrl-C | falhou | não |
+
+O XLSX só é lido se foi escrito neste passo (mtime >= início); senão vira "falhou: sem saída deste run".
+Linhas sem `VALIDATED_REAL/MARKUP` ganham `review_reasons` e nunca entram nos deals limpos.
+
 ## Desenvolvimento e verificação
 
 Alterações entram por branch + PR, com testes antes do merge. O operador autorizou

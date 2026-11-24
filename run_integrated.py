@@ -256,8 +256,11 @@ def fresh_fx() -> float:
 
 
 def _run_step(name: str, cmd: list[str], cwd: Path, timeout_s: int,
-              log_path: Path, env_extra: dict[str, str] | None = None) -> tuple[str, str, float]:
-    """Roda um subprocess com log + timeout. Retorna (status, detalhe, duração)."""
+              log_path: Path, env_extra: dict[str, str] | None = None,
+              exit_map: dict[int, tuple[str, str]] | None = None) -> tuple[str, str, float]:
+    """Roda um subprocess com log + timeout. Retorna (status, detalhe, duração).
+    exit_map = significado dos exit codes DESTA fonte (código → (status, detalhe));
+    sem ele vale o padrão (0 ok, 2 parcial, resto falhou)."""
     import os
     env = dict(os.environ, PYTHONIOENCODING="utf-8", PYTHONUTF8="1")
     if env_extra:
@@ -273,13 +276,33 @@ def _run_step(name: str, cmd: list[str], cwd: Path, timeout_s: int,
         dur = time.time() - t0
         if proc.returncode == 0:
             return "ok", "", dur
-        if proc.returncode == 2:
+        if exit_map and proc.returncode in exit_map:
+            st, why = exit_map[proc.returncode]
+            return st, f"{why} (exit {proc.returncode}; log {log_path.name})", dur
+        if exit_map is None and proc.returncode == 2:
             return "parcial", f"fonte interrompida/incompleta (exit 2; log {log_path.name})", dur
         return "falhou", f"exit code {proc.returncode} (log {log_path.name})", dur
     except subprocess.TimeoutExpired:
         return "timeout", f"excedeu {timeout_s//60} min", time.time() - t0
     except FileNotFoundError as exc:
         return "falhou", f"executável não encontrado: {exc}", time.time() - t0
+
+
+# Códigos do scanner CardTrader. Em 20-23 o XLSX é gravado completo e válido.
+CT_EXIT: dict[int, tuple[str, str]] = {
+    1: ("falhou", "erro fatal do scanner CT"),
+    2: ("falhou", "argumentos/run-guard do CT; nada foi escrito"),
+    20: ("parcial", "validação de preço parcial: algumas ofertas com erro de API/moeda não suportada"),
+    21: ("parcial", "nenhum preço de checkout validado"),
+    22: ("parcial", "API de validação falhou em todas as ofertas"),
+    23: ("parcial", "set(s) não avaliados por falha operacional"),
+    130: ("falhou", "interrompido (Ctrl-C)"),
+}
+
+
+def _fresh(path: Path, since: float) -> Path | None:
+    """O arquivo só vale se existir e tiver sido escrito neste passo (mtime >= início)."""
+    return path if path.exists() and path.stat().st_mtime >= since else None
 
 
 def scan_ct(scope: object, stamp: str, timeout_s: int, provider: str = "tcgcsv") -> tuple[str, str, float, Path | None]:
@@ -301,15 +324,15 @@ def scan_ct(scope: object, stamp: str, timeout_s: int, provider: str = "tcgcsv")
     cmd += ["--threshold", "0.30", "--chase-only", "--validate-top", "30",
             "--max-consecutive-misses", "40", "--output", str(out),
             "--provider", provider, "--no-cache", "--state-dir", str(OUT_DIR / "state" / stamp / "ct")]
+    t0 = time.time()
     status, detail, dur = _run_step("ct", cmd, repo, timeout_s,
-                                    LOG_DIR / f"ct_{stamp}.log")
+                                    LOG_DIR / f"ct_{stamp}.log", exit_map=CT_EXIT)
     if note:
         detail = f"{detail}; {note}" if detail else note
-    if status == "ok" and out.exists():
-        # The integrated MyP-format renderer owns delivery; no second report
-        # with different thresholds or additional price lookups is needed.
-        return status, detail, dur, out
-    return status, detail, dur, (out if out.exists() else None)
+    fresh = _fresh(out, t0)
+    if status == "parcial" and fresh is None:  # parcial sem XLSX deste run = sem dado
+        status, detail = "falhou", f"{detail}; sem saída deste run"
+    return status, detail, dur, fresh
 
 
 def scan_myp(scope: object, stamp: str, timeout_s: int, provider: str = "auto",
@@ -702,7 +725,8 @@ def main() -> int:
                     status_obj.detail,
                     f"{no_price} linha(s) sem preço de compra/referência — margem não calculada"]))
             for deal in src_deals:
-                if status_obj.status.startswith("parcial"):
+                # CT parcial (exit 20-23): o motivo por linha já vem de ct_row_to_deal
+                if status_obj.status.startswith("parcial") and src != "ct":
                     deal.review_reasons.append("coleta parcial — cobertura incompleta")
                 if args.skip_scan:
                     deal.review_reasons.append("releitura histórica — preço não renovado")

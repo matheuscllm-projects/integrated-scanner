@@ -304,7 +304,10 @@ COMC_REQUIRED = ("card", "set", "comc_price", "tcg_reference", "comc_url")
 LIGA_REQUIRED = ("card_name", "set_name", "price_liga_brl", "price_tcg_brl", "liga_url")
 
 # Colunas que só o RELATÓRIO PROCESSADO do postprocess do CT tem (diagnóstico).
-_CT_PROCESSED_MARKERS = ("Preço CT (R$)", "TCG (R$)")
+# "Preço CT (R$)" é o nome antigo; o relatório atual diz "Preço CT validado (R$)" e
+# "Preço usado na conta (R$)". Qualquer um + "TCG (R$)" = processado.
+_CT_PROCESSED_MARKERS = ("Preço CT (R$)", "Preço CT validado (R$)", "Preço usado na conta (R$)")
+_CT_PROCESSED_TCG = "TCG (R$)"
 
 
 def _missing_columns(columns, required) -> list[str]:
@@ -333,7 +336,7 @@ def _find_sheet(path: Path, required, label: str, preferred: str = "") -> str:
                 return name
             report.append(f"aba '{name}': faltam " + ", ".join(f"'{m}'" for m in missing))
     hint = ""
-    if all(m in seen_columns for m in _CT_PROCESSED_MARKERS):
+    if _CT_PROCESSED_TCG in seen_columns and any(m in seen_columns for m in _CT_PROCESSED_MARKERS):
         hint = (" Parece um relatório processado do postprocess (relatório, não scan cru): "
                 "não é lido como scan.")
     raise SourceFormatError(
