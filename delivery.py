@@ -20,7 +20,7 @@ from typing import Optional
 import math
 from urllib.parse import quote, urlsplit
 
-from normalize import Deal, UNIFIED_COLUMNS
+from normalize import Deal, UNIFIED_COLUMNS, floor_pct
 
 MIN_MARGEM_VENDA_PCT_DEFAULT = 30.0  # corte canônico: margem BRUTA sobre a venda (não ROI)
 
@@ -164,7 +164,7 @@ def build_markdown(deals: list[Deal],
                 flags.append(d.notorio)
             flags.extend(d.notas)
             cells = [str(i), _md_escape(d.fonte),
-                     f"{d.margem_venda_pct:.1f}%" if has_prices else "—",
+                     f"{floor_pct(d.margem_venda_pct):.1f}%" if has_prices else "—",
                      f"{d.roi_aquisicao_pct:.1f}%" if has_prices else "—",
                      f"{d.compra_brl:.2f}" if d.compra_brl > 0 else "—",
                      reference_price(f"{d.ref_usd:.2f}", supporting_url(d)) if d.ref_usd > 0 else "—",
@@ -224,7 +224,7 @@ def build_cross_source_markdown(cards: list,
                 cells.append(f"{d.compra_brl:.2f}{mark}")
         cells.append("validar correspondência" if c.validar else f"{cheap_src} (R${cheapest.compra_brl:.2f})")
         cells.append(reference_price(f"{cheapest.ref_brl:.2f}", supporting_url(cheapest)) if cheapest.ref_brl else "—")
-        cells.append(f"{cheapest.margem_venda_pct:.1f}" if cheapest.margem_venda_pct is not None else "—")
+        cells.append(f"{floor_pct(cheapest.margem_venda_pct):.1f}" if cheapest.margem_venda_pct is not None else "—")
         cells.append(f"{cheapest.roi_aquisicao_pct:.1f}" if cheapest.roi_aquisicao_pct is not None else "—")
         cells.append("validar" if c.validar else "")
         cells.append(_md_links_cell(cheapest.link_oferta, cheapest.link_tcg))

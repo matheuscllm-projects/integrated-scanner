@@ -34,6 +34,12 @@ def _now_utc_iso() -> str:
     return datetime.now(timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ")
 
 
+def _floor2(value: Optional[float]) -> Optional[float]:
+    """Margem na API: 2 casas, para BAIXO (29,96 nunca vira 30,0); o corte usa o valor cheio."""
+    from normalize import floor_pct
+    return None if value is None else floor_pct(value, 2)
+
+
 def build_store(deals: list, statuses: list, *, scope: Any, fx: float,
                 min_margin: float, stamp: str,
                 notorious_only: bool = False) -> dict:
@@ -51,7 +57,7 @@ def build_store(deals: list, statuses: list, *, scope: Any, fx: float,
         "deal_count": len(deals),
         "sources": [asdict(s) for s in statuses],
         # margem/ROI são propriedades derivadas dos preços (asdict não as inclui).
-        "deals": [dict(asdict(d), margem_venda_pct=d.margem_venda_pct,
+        "deals": [dict(asdict(d), margem_venda_pct=_floor2(d.margem_venda_pct),
                        roi_aquisicao_pct=d.roi_aquisicao_pct,
                        bucket=bucket_for(d, min_margin)) for d in deals],
     }

@@ -112,7 +112,7 @@ class Deal:
             "FX": round(self.fx, 3) if self.fx else "",
             "Ref TCG (R$)": round(self.ref_brl, 2),
             "Ref TCG (US$)": round(self.ref_usd, 2),
-            "Margem venda %": round(margem, 1) if margem is not None else "",
+            "Margem venda %": floor_pct(margem) if margem is not None else "",
             "ROI aquisição %": round(roi, 1) if roi is not None else "",
             "Lucro (R$)": round(self.lucro_brl, 2),
             "Qtd": self.qtd if self.qtd is not None else "—",
@@ -166,6 +166,13 @@ def sale_margin_pct(ref_brl: float, compra_brl: float) -> Optional[float]:
     if not _valid_prices(ref_brl, compra_brl):
         return None
     return (ref_brl - compra_brl) / ref_brl * 100.0
+
+
+def floor_pct(value: float, decimals: int = 1) -> float:
+    """Arredonda para BAIXO (exibição): 29,96% nunca vira 30,0%, que contradiria o corte.
+    O round(…, 9) antes só tira ruído de float (40.0 calculado como 39.99999999)."""
+    scale = 10 ** decimals
+    return math.floor(round(value, 9) * scale) / scale
 
 
 def roi_pct(ref_brl: float, compra_brl: float) -> Optional[float]:
