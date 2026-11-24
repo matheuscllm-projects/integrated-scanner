@@ -284,6 +284,25 @@ def scan_myp(scope: object, stamp: str, timeout_s: int, provider: str = "auto",
     return status, detail, dur, (out if out.exists() else None)
 
 
+def _comc_cmd(era: str, abbrevs: list[str] | None) -> list[str]:
+    # `scan` é o único subcomando de varredura do CLI do COMC (não existe `targeted`,
+    # --fetch-mode nem --no-sheets); --restart é aceita e ignorada. Ver test_comc_command.
+    cmd = [str(VENV_PY["comc"]), "-m", "comc_scanner", "scan",
+           "--era", era, "--restart", "--chase-only"]
+    if abbrevs:  # allowlist do COMC: nomes/abrevs separados por vírgula
+        cmd += ["--sets", ",".join(abbrevs)]
+    return cmd
+
+
+def _comc_cli_rejected(log_path: Path) -> bool:
+    """True se o argparse do COMC recusou a linha de comando (exit 2 de uso, que
+    _run_step leria como "parcial"): é falha operacional, não scan interrompido."""
+    try:
+        return "comc_scanner: error:" in log_path.read_text(encoding="utf-8", errors="replace")
+    except OSError:
+        return False
+
+
 def scan_comc(scope: object, stamp: str, timeout_s: int) -> tuple[str, str, float, list[Path]]:
     repo = REPOS["comc"]
     # O COMC scaneia por ERA mas aceita allowlist --sets DENTRO da era. Em modo
@@ -305,17 +324,15 @@ def scan_comc(scope: object, stamp: str, timeout_s: int) -> tuple[str, str, floa
     t_start = time.time()  # p/ não confundir CSV deste run com sobra de run antigo
     overall, details, total_dur = "ok", [], 0.0
     for era, abbrevs in era_groups:
-        cmd = [str(VENV_PY["comc"]), "-m", "comc_scanner", "targeted",
-               "--era", era, "--fetch-mode", "playwright", "--no-sheets",
-               "--restart", "--chase-only"]
-        if abbrevs:  # allowlist do COMC: nomes/abbrevs separados por vírgula
-            cmd += ["--sets", ",".join(abbrevs)]
+        cmd = _comc_cmd(era, abbrevs)
         # margem default do COMC já é 0.30 (FRAÇÃO) + piso $10 — canônicos.
         status, detail, dur = _run_step(f"comc-{era}", cmd, repo, timeout_s,
                                         LOG_DIR / f"comc_{era}_{stamp}.log")
         total_dur += dur
         if status != "ok":
             overall = status
+            if _comc_cli_rejected(LOG_DIR / f"comc_{era}_{stamp}.log"):
+                overall, detail = "falhou", "falha operacional: comando COMC indisponível (CLI recusou a linha de comando)"
             details.append(f"{era}: {detail}")
     note = _skip_note(skipped, "COMC não cobre")
     if note:
