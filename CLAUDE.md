@@ -120,7 +120,18 @@ STALE, API_ERROR e PRICE_CHANGED ficam fora da escolha de menor preço.
 ## Falhas, API e releitura histórica
 
 Cada fonte mantém erro, log e horário. Nenhuma falha cai no último XLSX antigo.
-Saída 0 = sucesso; 2 = parcial; 1 = falha/indisponibilidade total.
+Status por fonte (o resumo e `run_status` da API repetem a frase `Código de saída N — ...`):
+`ok` (arquivo válido com linhas com preço) · `ok (fonte sem linhas)` (arquivo válido e vazio:
+a fonte não trouxe nada, não é falha) · `sem cobertura (...)` (há linhas, mas nenhuma com
+referência e preço de compra, ou câmbio ausente: NÃO é ok) · `parcial (N de M linhas ...)`
+(parte das linhas sem referência/compra ou fora do contrato) · `falhou`/`timeout`/`indisponível`.
+Saída 0 = todas as fontes ativas ok (inclui "fonte sem linhas"); 2 = alguma fonte falhou,
+ficou sem cobertura ou parcial, mas ao menos uma está ok; 1 = nenhuma fonte ok.
+Nunca 0 com fonte falha ou sem cobertura. `GET /deals` responde 409 pedindo novo scan se o
+store tiver outro `schema_version`, e informa `sem_margem` (linhas sem margem não passam
+em filtro de margem e vão ao fim). Margem é exibida arredondada para BAIXO (29,96% nunca
+vira 30,0%). Sem câmbio (`--skip-scan` sem `--fx`) o COMC fica "câmbio ausente", nunca
+calculado com câmbio 0 nem cotação presumida.
 A API reflete `done`, `partial` ou `failed`; `/status` informa modo e limite diagnóstico.
 
 ```powershell
