@@ -77,8 +77,16 @@ def _now() -> str:
     return datetime.now(timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ")
 
 
+def _load() -> Optional[dict]:
+    """load_store com o erro de schema virado em HTTP 409 (conflito: precisa de novo scan)."""
+    try:
+        return api_store.load_store()
+    except api_store.StoreSchemaError as exc:
+        raise HTTPException(status_code=409, detail=str(exc))
+
+
 def _require_store() -> dict:
-    store = api_store.load_store()
+    store = _load()
     if store is None:
         raise HTTPException(
             status_code=404,
@@ -95,7 +103,11 @@ def health() -> dict:
 
 @app.get("/")
 def root() -> dict:
-    store = api_store.load_store()
+    store_error = None
+    try:
+        store = api_store.load_store()
+    except api_store.StoreSchemaError as exc:
+        store, store_error = None, str(exc)
     last = None
     if store:
         last = {"generated_utc": store.get("generated_utc"),
@@ -108,6 +120,7 @@ def root() -> dict:
         "endpoints": ["/health", "/sets", "/sources", "/deals", "/status",
                       "/scan (POST)", "/scan/{job_id}", "/docs"],
         "last_run": last,
+        "store_error": store_error,
     }
 
 
@@ -120,7 +133,7 @@ def sets() -> dict:
 @app.get("/sources")
 def sources() -> dict:
     """As 4 fontes + o status do último run (do store, se houver)."""
-    store = api_store.load_store()
+    store = _load()
     by_src = {s["source"].lower(): s for s in (store or {}).get("sources", [])}
     out = []
     for src in sorted(VALID_SOURCES):

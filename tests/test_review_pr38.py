@@ -87,3 +87,42 @@ def test_b1_rows_without_margin_go_last_and_are_counted(client, monkeypatch):
     body = client.get("/deals").json()
     assert [d["carta"] for d in body["deals"]] == ["Com", "Neg", "Sem"]
     assert body["sem_margem"] == 1
+
+
+# ── M2: store de schema antigo nunca é servido ───────────────────────────────
+OLD_STORE = {"schema_version": 1, "stamp": "OLD", "deal_count": 1, "sources": [],
+             "deals": [{"carta": "Velha", "fonte": "MYP", "margem_antiga": 33.3}]}
+
+
+@pytest.mark.parametrize("url", ["/deals?min_margin=30", "/deals", "/status", "/sources"])
+def test_m2_old_schema_store_is_refused_not_served(client, monkeypatch, tmp_path, url):
+    p = tmp_path / "deals_store.json"
+    p.write_text(json.dumps(OLD_STORE), encoding="utf-8")
+    monkeypatch.setattr(api_store, "STORE_PATH", p)
+    r = client.get(url)
+    assert r.status_code == 409
+    detail = r.json()["detail"]
+    assert "schema" in detail and "novo scan" in detail
+    assert "Velha" not in r.text and "margem_antiga" not in r.text
+
+
+def test_m2_store_without_schema_version_is_refused(client, monkeypatch, tmp_path):
+    p = tmp_path / "deals_store.json"
+    p.write_text(json.dumps({"deals": []}), encoding="utf-8")
+    monkeypatch.setattr(api_store, "STORE_PATH", p)
+    assert client.get("/deals").status_code == 409
+
+
+def test_m2_root_reports_incompatible_store_instead_of_last_run(client, monkeypatch, tmp_path):
+    p = tmp_path / "deals_store.json"
+    p.write_text(json.dumps(OLD_STORE), encoding="utf-8")
+    monkeypatch.setattr(api_store, "STORE_PATH", p)
+    body = client.get("/").json()
+    assert body["last_run"] is None and "novo scan" in body["store_error"]
+
+
+def test_m2_current_schema_store_is_served(client, monkeypatch, tmp_path):
+    p = tmp_path / "deals_store.json"
+    api_store.save_store(_store([deal(60, 100)]), path=p, keep_history=False)
+    monkeypatch.setattr(api_store, "STORE_PATH", p)
+    assert client.get("/deals").json()["count"] == 1

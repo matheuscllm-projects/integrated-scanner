@@ -80,11 +80,24 @@ def save_store(store: dict, path: Path = STORE_PATH,
     return path
 
 
-def load_store(path: Path = STORE_PATH) -> Optional[dict]:
-    """Lê o store mais recente; None se ainda não existe (nenhum scan rodou)."""
+class StoreSchemaError(RuntimeError):
+    """Store gravado com outro schema_version: não é servido (números de outra base)."""
+
+
+def load_store(path: Optional[Path] = None) -> Optional[dict]:
+    """Lê o store mais recente; None se ainda não existe (nenhum scan rodou).
+    Store de OUTRO schema_version → StoreSchemaError (nunca lista vazia nem número antigo)."""
+    path = path or STORE_PATH
     if not path.exists():
         return None
     try:
-        return json.loads(path.read_text(encoding="utf-8"))
+        store = json.loads(path.read_text(encoding="utf-8"))
     except (OSError, json.JSONDecodeError):
         return None
+    found = store.get("schema_version") if isinstance(store, dict) else None
+    if found != SCHEMA_VERSION:
+        raise StoreSchemaError(
+            f"store com schema {found!r}, a API espera schema {SCHEMA_VERSION} "
+            f"(margem sobre a venda). Rode um novo scan (run_integrated.py ou POST /scan) "
+            f"para regravar o store; o store antigo não é servido.")
+    return store
