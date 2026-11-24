@@ -21,8 +21,8 @@ DECISÕES DE DESIGN (documentadas porque as fontes divergem):
 2. FX (câmbio USD→BRL) é EXPLÍCITO por linha (coluna FX):
      - CardTrader: implícito na própria linha (TCG BRL ÷ TCG USD)
      - Liga: coluna exchange_rate do report
-     - MYP e COMC: FX global (flag --fx; default = inferido do output mais
-       recente do CT, senão 5.20 documentado)
+     - MYP e COMC: FX global (flag --fx ou consulta nova). SEM câmbio não há
+       cotação presumida: COMC fica sem preço em R$, marcado "câmbio ausente"
 
 3. VALORIZAÇÃO (0-100): o CardTrader scanner v2.13 já emite o score; pra
    MYP/COMC/Liga replicamos AQUI a MESMA heurística (funções portadas de
@@ -45,8 +45,6 @@ from pathlib import Path
 from typing import Any, Optional
 
 from notorious import match_notorious
-
-FX_FALLBACK = 5.20  # último recurso, documentado; prefira --fx ou inferência CT
 
 UNIFIED_COLUMNS = [
     "Fonte", "Carta", "Set", "Nº", "Raridade", "Chase Tier", "Notório",
@@ -86,6 +84,7 @@ class Deal:
     validation_status: str = ""
     scanned_at: str = ""
     review_reasons: list[str] = field(default_factory=list)
+    data_issue: str = ""         # "" | "cambio_ausente" | "chaves_ausentes" (conta no status da fonte)
 
     @property
     def margem_venda_pct(self) -> Optional[float]:
@@ -351,6 +350,8 @@ def _require_keys(rows: list[dict], required, label: str, name: str) -> None:
 
 def _flag_missing_prices(deal: "Deal") -> None:
     """Preço ausente/zero nunca vira margem: a linha fica explicitamente marcada."""
+    if deal.data_issue == "cambio_ausente":   # motivo já registrado: o problema é o câmbio
+        return
     if deal.ref_brl <= 0:
         deal.review_reasons.append("sem referência de preço — margem não calculada")
     if deal.compra_brl <= 0:
@@ -556,8 +557,10 @@ def comc_row_to_deal(row: dict[str, Any], fx_global: float) -> Deal:
     compra_usd = _num(_col(row, "comc_price"))
     ref_usd = _num(_col(row, "tcg_reference"))
     fx = fx_global
-    compra_brl = compra_usd * fx
-    ref_brl = ref_usd * fx
+    no_fx = not (math.isfinite(fx) and fx > 0)
+    # Sem câmbio NÃO se calcula (nem se presume): R$ fica 0 = "sem preço", USD preservado.
+    compra_brl = 0.0 if no_fx else compra_usd * fx
+    ref_brl = 0.0 if no_fx else ref_usd * fx
     rarity = str(_col(row, "rarity") or "")
     name_raw = str(_col(row, "card") or "")
     carta = re.sub(r"\s*-\s*\d+[a-zA-Z]?/\d+\s*$", "", name_raw).strip()
@@ -575,11 +578,15 @@ def comc_row_to_deal(row: dict[str, Any], fx_global: float) -> Deal:
         ref_brl=ref_brl,
         ref_usd=ref_usd,
         lucro_brl=ref_brl - compra_brl,
+        data_issue="cambio_ausente" if no_fx else "",
         qtd=int(_num(_col(row, "quantity"), 0)) or None,
         valorizacao=score,
         link_oferta=str(_col(row, "comc_url") or ""),
         link_tcg=str(_col(row, "tcg_url") or ""),
     )
+    if no_fx:
+        deal.review_reasons.append("câmbio ausente — USD→BRL não calculado (informe --fx); "
+                                   "preço em R$ e margem indisponíveis")
     deal.notas.append(note)
     cond = _col(row, "condition")
     deal.condition = _clean_str(cond)
@@ -777,6 +784,11 @@ def read_liga(path: Path, fx_global: float) -> list[Deal]:
     if rows:
         _require_keys(rows, LIGA_REQUIRED, "report da Liga", path.name)
     deals = [liga_row_to_deal(row, fx_global) for row in rows]
+    for deal, row in zip(deals, rows):
+        absent = [k for k in LIGA_REQUIRED if k not in row]
+        if absent:  # basta UMA linha ter as chaves para passar o contrato: as outras são marcadas
+            deal.data_issue = "chaves_ausentes"
+            deal.review_reasons.append("linha sem chaves obrigatórias da fonte: " + ", ".join(absent))
     for deal in deals:
         if deal.validation_status != "approved":
             deal.review_reasons.append("rejeitada pela Liga: " + (deal.validation_status or "sem status"))

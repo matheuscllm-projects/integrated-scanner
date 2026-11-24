@@ -90,7 +90,8 @@ def test_live_failure_never_discovers_old_output(monkeypatch, isolated):
     root, stores = isolated
     stale = root/'old.xlsx'
     pd.DataFrame([ct_row()]).to_excel(stale, index=False)
-    monkeypatch.setattr(run, 'latest_ct_output', lambda: pytest.fail('stale finder invoked'))
+    import normalize
+    monkeypatch.setattr(normalize, 'latest_ct_output', lambda *a: pytest.fail('stale finder invoked'))
     monkeypatch.setattr(run, 'scan_ct', lambda *a: ('falhou', 'exit code 1; original cause', 1, None))
     monkeypatch.setattr(sys, 'argv', ['run', '--sets', 'PRE', '--sources', 'ct'])
     assert run.main() == 1

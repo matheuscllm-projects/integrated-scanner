@@ -104,7 +104,8 @@ def build_markdown(deals: list[Deal],
                    fx_global: float,
                    min_margem_venda_pct: float = MIN_MARGEM_VENDA_PCT_DEFAULT,
                    notorious_only: bool = False,
-                   title: str = "Scanner integrado de singles — entrega unificada") -> str:
+                   title: str = "Scanner integrado de singles — entrega unificada",
+                   outcome: str = "") -> str:
     lines: list[str] = [f"# {title}", ""]
 
     # ── Resumo por fonte ──────────────────────────────────────────────
@@ -119,6 +120,8 @@ def build_markdown(deals: list[Deal],
             f"| {s.source} | {s.status} | {s.deals_raw} | {s.deals_kept} "
             f"| {dur} | {_md_escape(out)} | {_md_escape('; '.join(filter(None, [s.detail, s.collected_at, s.mode]))) or '—'} |")
     lines.append("")
+    if outcome:
+        lines += [f"**{outcome}**", ""]
     lines.append(
         f"Corte aplicado: **margem bruta sobre a venda ≥ {min_margem_venda_pct:.0f}%** "
         f"(base = referência: (referência − compra) ÷ referência; zero taxas). "

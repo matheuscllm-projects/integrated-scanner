@@ -44,8 +44,7 @@ if hasattr(sys.stdout, "reconfigure"):
     sys.stdout.reconfigure(encoding="utf-8")
     sys.stderr.reconfigure(encoding="utf-8")
 
-from normalize import (REPOS, FX_FALLBACK, comc_run_summaries, infer_fx_from_ct,
-                       latest_ct_output, latest_comc_outputs, latest_myp_output,
+from normalize import (REPOS, comc_run_summaries, latest_comc_outputs,
                        read_comc, read_ct, read_liga, read_myp)
 from delivery import (MIN_MARGEM_VENDA_PCT_DEFAULT, SourceStatus,
                       build_cross_source_markdown, build_markdown,
@@ -176,7 +175,52 @@ def _mark_no_output(status_obj) -> None:
     status_obj.detail = "; ".join(filter(None, [status_obj.detail, "nenhum output desta execução"]))
 
 
+def assess_coverage(status: str, deals: list) -> tuple[str, str]:
+    """Status honesto de uma fonte cujo arquivo FOI lido (contrato válido).
+
+    Distingue: ok com linhas | ok (fonte sem linhas) | sem cobertura (nenhuma linha
+    com referência e compra, ou câmbio ausente) | parcial (parte das linhas sem
+    preço ou fora do contrato, com a contagem). Arquivo inválido nem chega aqui
+    (vira "falhou"). Devolve (status, detalhe)."""
+    if not status.startswith("ok"):
+        return status, ""
+    n = len(deals)
+    if n == 0:
+        return ("ok (fonte sem linhas)",
+                "arquivo válido, mas sem linhas: a fonte não trouxe nada (não é falha)")
+    priced = [d for d in deals if d.compra_brl > 0 and d.ref_brl > 0]
+    no_fx = sum(d.data_issue == "cambio_ausente" for d in deals)
+    bad_keys = sum(d.data_issue == "chaves_ausentes" for d in deals)
+    notes = []
+    if bad_keys:
+        notes.append(f"{bad_keys} linha(s) sem chaves obrigatórias da fonte")
+    if no_fx:
+        notes.append(f"{no_fx} linha(s) sem câmbio (informe --fx)")
+    if not priced:
+        why = "câmbio ausente" if no_fx == n else "nenhuma linha com referência e preço de compra"
+        return f"sem cobertura ({n} linhas; {why})", "; ".join(notes)
+    bad = n - sum(1 for d in priced if not d.data_issue)
+    if bad:
+        return (f"parcial ({bad} de {n} linhas sem referência/compra ou fora do contrato)",
+                "; ".join(notes))
+    return status, ""
+
+
+def run_outcome(statuses: list[SourceStatus]) -> str:
+    """Frase do resumo final: o código de saída e quais fontes não estão ok."""
+    code = run_exit_code(statuses)
+    bad = [f"{s.source}: {s.status}" for s in statuses
+           if not s.status.startswith(("ok", "pulado (escopo)"))]
+    meaning = {0: "todas as fontes ativas ok",
+               2: "resultado PARCIAL: alguma fonte falhou, ficou sem cobertura ou parcial",
+               1: "FALHA: nenhuma fonte entregou dados utilizáveis"}[code]
+    return f"Código de saída {code} — {meaning}" + (f" ({'; '.join(bad)})" if bad else "") + "."
+
+
 def run_exit_code(statuses: list[SourceStatus]) -> int:
+    """0 = todas as fontes ativas ok (inclui "ok (fonte sem linhas)"); 2 = alguma fonte
+    falhou/timeout/indisponível/sem cobertura/parcial, mas ao menos uma está ok (ou há
+    parcial); 1 = nenhuma fonte ok. Nunca 0 com fonte falha ou sem cobertura."""
     active = [s for s in statuses if not s.status.startswith("pulado (escopo)")]
     ok = [s for s in active if s.status.startswith("ok")]
     if active and len(ok) == len(active):
@@ -536,10 +580,7 @@ def main() -> int:
                                      else "; ".join(str(p) for p in out) if out else ""))
 
     # ── fase 2: normalizar ───────────────────────────────────────────────
-    readers = {
-        "ct": (latest_ct_output, read_ct),
-        "myp": (latest_myp_output, read_myp),
-    }
+    readers = {"ct": read_ct, "myp": read_myp}
     for src in sources:
         status_obj = next((s for s in statuses if s.source == src.upper()), None)
         if status_obj is None:
@@ -550,16 +591,18 @@ def main() -> int:
         # mostraria deals stale de um scan anterior, fora do escopo pedido).
         if status_obj.status.startswith("pulado (escopo)"):
             continue
+        read_ok = False   # True = um arquivo foi lido e cumpriu o contrato
         try:
             src_deals = []
             if src in readers:
-                finder, reader = readers[src]
+                reader = readers[src]
                 path = ({"ct": args.ct_output, "myp": args.myp_output}.get(src)
                         if args.skip_scan else produced.get(src))
                 if not args.skip_scan and not status_obj.status.startswith(("ok", "parcial")):
                     continue
                 if path:
                     src_deals = reader(Path(path), fx_global)
+                    read_ok = True
                     status_obj.output_path = str(path)
                     if args.skip_scan:
                         from datetime import timezone
@@ -573,6 +616,7 @@ def main() -> int:
                 if paths:
                     for p in paths:
                         src_deals += read_comc(Path(p), fx_global)
+                    read_ok = True
                     status_obj.output_path = "; ".join(str(p) for p in paths)
                     if status_obj.status.startswith("pulado"):
                         status_obj.status = "ok (output existente)"
@@ -587,9 +631,10 @@ def main() -> int:
                     path = Path(args.liga_report)
                 if path and Path(path).exists():
                     src_deals = read_liga(Path(path), fx_global)
+                    read_ok = True
                     status_obj.output_path = str(path)
-                    if not status_obj.detail:        # preserva aviso staleness
-                        status_obj.status = "ok"
+                    if status_obj.status.startswith("pulado"):
+                        status_obj.status = "ok (histórico explícito)"
                 elif status_obj.status.startswith("pulado"):
                     status_obj.status = "indisponível"
                     status_obj.detail = (
@@ -608,6 +653,10 @@ def main() -> int:
                     deal.review_reasons.append("coleta parcial — cobertura incompleta")
                 if args.skip_scan:
                     deal.review_reasons.append("releitura histórica — preço não renovado")
+            if read_ok:
+                new_status, note = assess_coverage(status_obj.status, src_deals)
+                status_obj.status = new_status
+                status_obj.detail = "; ".join(filter(None, [status_obj.detail, note]))
             kept = filter_deals(src_deals, args.min_margin, args.notorious_only)
             status_obj.deals_kept = len(kept)
             deals.extend(src_deals)
@@ -623,8 +672,9 @@ def main() -> int:
         title += " — RELEITURA HISTÓRICA (não é coleta atual)"
     if args.myp_max_products:
         title += f" — DIAGNÓSTICO LIMITADO ({args.myp_max_products} produtos/edição MYP)"
+    outcome = run_outcome(statuses)
     md = build_markdown(visible, statuses, fx_global, args.min_margin,
-                        args.notorious_only, title=title)
+                        args.notorious_only, title=title, outcome=outcome)
     # Seção ADITIVA: a mesma carta em ≥2 fontes, preço lado a lado (não substitui
     # a tabela plana acima — regra do operador é mostrar TODOS os deals).
     cross = group_cross_source([d for d in visible if d.compra_brl > 0 and d.ref_brl > 0
@@ -643,6 +693,7 @@ def main() -> int:
                             notorious_only=args.notorious_only)
         store.update(run_status={0: "done", 1: "failed", 2: "partial"}[run_exit_code(statuses)],
                      mode="historical" if args.skip_scan else "scan",
+                     run_note=outcome,
                      diagnostic_limit=args.myp_max_products, myp_delay_s=args.myp_delay)
         if args.skip_scan:
             store_path = OUT_DIR / f"historical_store_{stamp}.json"
@@ -658,6 +709,7 @@ def main() -> int:
     print(md)
     print(f"(apoio local: {md_path} e {xlsx_path} — a entrega oficial é a "
           f"tabela acima, no chat)")
+    print(outcome)
     return run_exit_code(statuses)
 
 
