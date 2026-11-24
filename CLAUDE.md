@@ -93,7 +93,7 @@ sobre a venda equivale a 42,86% de ROI, e 30% de ROI equivale a só 23,08% de ma
 Ex.: compra 75, referência 100 → ROI 33,3%, margem 25%: NÃO passa o corte. Preço de compra
 ou referência ausente/zero → sem número ("—") e bucket "Rejeitados / sem referência",
 nunca margem calculada com zero. As fontes mantêm seus cortes próprios, registrados por
-fonte no resumo ("corte de origem"): MYP e Liga 30% sobre a compra (= 23,1% sobre a venda);
+fonte no resumo ("corte de origem"): MYP e Liga 30% sobre a venda (MYP #107 e Liga #59 mudaram a base na origem);
 CT 30% sobre a venda (`--threshold 0.30`, fração; igual ao do integrado); COMC
 `MIN_DISCOUNT_PERCENT = 20`, inteiro, sobre a venda (o integrado passa `--min-discount 20`
 explícito, pois a variável de ambiente do COMC poderia apertá-lo sem ele saber). Todos

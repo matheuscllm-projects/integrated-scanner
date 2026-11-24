@@ -7,7 +7,7 @@ PRÓPRIAS flags canônicas — e depois unifica os outputs numa tabela única
 
 ATENÇÃO às convenções de threshold DIFERENTES entre as fontes (armadilha real):
   - CardTrader:  FRAÇÃO   → 0.30 sobre a VENDA (passar 30 = 3000%, zero deals!)
-  - MYP e Liga:  PERCENT  → 30 sobre a COMPRA (= 23,1% sobre a venda)
+  - MYP e Liga:  PERCENT  → 30 sobre a VENDA (MYP #107 e Liga #59 já cortam sobre a venda)
   - COMC:        INTEIRO  → --min-discount 20 sobre a VENDA (MIN_DISCOUNT_PERCENT = 20;
                  a variável de ambiente do COMC pode apertar, por isso passamos 20 explícito)
 Todos são iguais ou mais frouxos que o corte de 30% sobre a venda deste integrado, que
@@ -105,10 +105,10 @@ LIGA_COLLECT_TIMEOUT = 90 * 60
 # resumo por fonte; o corte do integrado (30% sobre a venda) é reaplicado por cima.
 COMC_MIN_DISCOUNT_PERCENT = 20   # inteiro, sobre a venda (padrão do scanner COMC)
 ORIGIN_CUTS = {
-    "myp": "30% sobre a compra (--threshold 30) = 23,1% sobre a venda",
+    "myp": "30% sobre a venda (--threshold 30, percent inteiro)",
     "ct": "30% sobre a venda (--threshold 0.30, fração)",
     "comc": f"{COMC_MIN_DISCOUNT_PERCENT}% sobre a venda (--min-discount {COMC_MIN_DISCOUNT_PERCENT}, inteiro)",
-    "liga": "30% sobre a compra (pipeline da Liga) = 23,1% sobre a venda",
+    "liga": "30% sobre a venda (pipeline da Liga)",
 }
 
 

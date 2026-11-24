@@ -30,7 +30,7 @@ def test_b3_comc_receives_its_origin_cut_explicitly(monkeypatch, tmp_path):
 def test_b3_each_source_has_a_documented_origin_cut():
     assert set(run.ORIGIN_CUTS) == {'myp', 'ct', 'comc', 'liga'}
     assert '20%' in run.ORIGIN_CUTS['comc'] and 'venda' in run.ORIGIN_CUTS['comc']
-    assert 'compra' in run.ORIGIN_CUTS['myp'] and 'compra' in run.ORIGIN_CUTS['liga']
+    assert all('sobre a venda' in run.ORIGIN_CUTS[s] for s in ('myp', 'liga', 'ct'))
 
 
 def test_b3_summary_shows_origin_cut_per_source(monkeypatch, tmp_path):

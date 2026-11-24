@@ -108,3 +108,10 @@ def test_processed_report_markers(tmp_path, cols):
     pd.DataFrame([{c: 1 for c in cols}]).to_excel(p, index=False)
     with pytest.raises(SourceFormatError, match='processado'):
         _find_sheet(p, ('Card Name',), 'scan cru')
+
+
+def test_origin_cut_text_per_source_is_sobre_a_venda():
+    for src in ('myp', 'ct', 'liga'):
+        assert run.ORIGIN_CUTS[src].startswith('30% sobre a venda'), src
+    assert run.ORIGIN_CUTS['comc'].startswith('20% sobre a venda')
+    assert not any('compra' in v or '23,1' in v for v in run.ORIGIN_CUTS.values())
