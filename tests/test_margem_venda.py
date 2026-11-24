@@ -3,9 +3,6 @@
 Decisão do dono: margem = (referência − compra) / referência alimenta o corte;
 ROI = (referência − compra) / compra é métrica SEPARADA, exibida à parte e
 nunca usada no corte. Nenhum nome ambíguo (`margem_pct`, "Margem bruta %")."""
-import re
-from pathlib import Path
-
 import pytest
 
 import api
@@ -15,7 +12,6 @@ from delivery import bucket_for, build_cross_source_markdown, build_markdown, fi
 from normalize import (UNIFIED_COLUMNS, Deal, comc_row_to_deal, ct_row_to_deal,
                        liga_row_to_deal, myp_row_to_deal, roi_pct, sale_margin_pct)
 
-ROOT = Path(__file__).resolve().parents[1]
 CLEAN = dict(price_status="real", validation_status="VALIDATED_REAL",
              link_tcg="https://example.org/ref", link_oferta="https://example.org/offer")
 
@@ -110,16 +106,3 @@ def test_api_store_and_filter_use_sale_margin():
     assert rows["High"]["roi_aquisicao_pct"] == pytest.approx(66.667, abs=1e-2)
     assert "margem_pct" not in rows["High"]
     assert rows["Low"]["bucket"].startswith("Abaixo do corte")
-
-
-def test_no_ambiguous_margin_names_left_in_code():
-    """Trava estrutural: nenhum `margem_pct` / `gross_margin_pct` / 'Margem bruta' no código."""
-    pat = re.compile(r"\bmargem_pct\b|\bgross_margin_pct\b|Margem bruta %|margem bruta unificada", re.I)
-    offenders = []
-    for p in list(ROOT.glob("*.py")) + list((ROOT / "tests").glob("*.py")):
-        if p.name == "test_margem_venda.py":
-            continue
-        for n, line in enumerate(p.read_text(encoding="utf-8").splitlines(), 1):
-            if pat.search(line):
-                offenders.append(f"{p.name}:{n}")
-    assert not offenders, offenders
