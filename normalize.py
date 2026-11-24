@@ -681,29 +681,63 @@ REPOS = {
 }
 
 
-def _newest_conforming(candidates, required, label: str, preferred: str) -> Optional[Path]:
-    """Mais novo arquivo que cumpre o CONTRATO de conteúdo; o nome não conta."""
+@dataclass
+class Located:
+    """Arquivo escolhido por conteúdo + avisos sobre arquivos mais novos REJEITADOS
+    (nunca pulados em silêncio). `sheet` é a aba validada pelo contrato."""
+    path: Optional[Path] = None
+    sheet: str = ""
+    notes: list[str] = field(default_factory=list)
+
+
+def _stamp(p: Path) -> str:
+    return datetime.fromtimestamp(p.stat().st_mtime).strftime("%Y-%m-%d %H:%M")
+
+
+def _locate_conforming(candidates, required, label: str, preferred: str) -> Located:
+    """Mais novo arquivo que cumpre o CONTRATO de conteúdo; o nome não conta.
+    Cada arquivo mais novo que o escolhido e rejeitado vira uma nota com o motivo."""
+    rejected: list[tuple[Path, str]] = []
     for p in sorted(candidates, key=lambda p: p.stat().st_mtime, reverse=True):
         try:
-            _find_sheet(p, required, label, preferred)
-        except SourceFormatError:
+            sheet = _find_sheet(p, required, label, preferred)
+        except SourceFormatError as exc:
+            rejected.append((p, str(exc)))
             continue
-        return p
-    return None
+        notes = [f"{r.name} (de {_stamp(r)}) rejeitado, mais novo que o usado: {why} "
+                 f"→ usado {p.name} (de {_stamp(p)})" for r, why in rejected]
+        return Located(p, sheet, notes)
+    return Located(None, "", [f"{r.name} (de {_stamp(r)}) rejeitado: {why}" for r, why in rejected])
 
 
-def latest_ct_output(repo: Path = REPOS["ct"]) -> Optional[Path]:
+def _warn_rejected(found: Located) -> Optional[Path]:
+    import warnings
+    for note in found.notes:
+        warnings.warn(note, UserWarning, stacklevel=3)
+    return found.path
+
+
+def locate_ct_output(repo: Path = REPOS["ct"]) -> Located:
     """xlsx de scan CRU mais recente, reconhecido pelo conteúdo (abas/colunas
     obrigatórias), não pelo nome: relatório processado nunca é escolhido."""
-    return _newest_conforming((repo / "outputs").glob("*.xlsx"), CT_RAW_REQUIRED,
+    return _locate_conforming((repo / "outputs").glob("*.xlsx"), CT_RAW_REQUIRED,
                               "scan cru do CardTrader", CT_RAW_SHEET)
 
 
-def latest_myp_output(repo: Path = REPOS["myp"]) -> Optional[Path]:
+def locate_myp_output(repo: Path = REPOS["myp"]) -> Located:
     candidates = list((repo / "results").glob("*.xlsx"))
     candidates += list(repo.glob("myp_arbitrage_*.xlsx"))
     candidates = [p for p in candidates if not p.name.endswith(".bak")]
-    return _newest_conforming(candidates, MYP_REQUIRED, "resultado do MYP", MYP_SHEET)
+    return _locate_conforming(candidates, MYP_REQUIRED, "resultado do MYP", MYP_SHEET)
+
+
+def latest_ct_output(repo: Path = REPOS["ct"]) -> Optional[Path]:
+    """Só o caminho; arquivo mais novo rejeitado emite UserWarning (use locate_* p/ as notas)."""
+    return _warn_rejected(locate_ct_output(repo))
+
+
+def latest_myp_output(repo: Path = REPOS["myp"]) -> Optional[Path]:
+    return _warn_rejected(locate_myp_output(repo))
 
 
 def latest_comc_outputs(repo: Path = REPOS["comc"]) -> list[Path]:
@@ -797,12 +831,12 @@ def read_liga(path: Path, fx_global: float) -> list[Deal]:
 
 def infer_fx_from_ct(repo: Path = REPOS["ct"]) -> Optional[float]:
     """FX implícito no output CT mais recente (mediana de TCG BRL ÷ TCG USD)."""
-    path = latest_ct_output(repo)
-    if not path:
+    found = locate_ct_output(repo)
+    if not found.path:
         return None
     try:
         import pandas as pd
-        df = pd.read_excel(path)
+        df = pd.read_excel(found.path, sheet_name=found.sheet)  # a aba que o contrato validou
         brl = df.get("TCG Market (BRL)")
         usd = df.get("TCG Market (USD)")
         if brl is None or usd is None:
