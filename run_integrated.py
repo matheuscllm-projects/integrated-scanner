@@ -34,6 +34,7 @@ from __future__ import annotations
 import argparse
 import csv
 import json
+import re
 import subprocess
 import sys
 import time
@@ -341,6 +342,41 @@ def scan_myp(scope: object, stamp: str, timeout_s: int, provider: str = "auto",
     return status, detail, dur, (out if out.exists() else None)
 
 
+def _comc_cmd(era: str, abbrevs: list[str] | None) -> list[str]:
+    # `scan` é o único subcomando de varredura do CLI do COMC (não existe `targeted`,
+    # --fetch-mode nem --no-sheets); --restart é aceita e ignorada. Ver test_comc_command.
+    cmd = [str(VENV_PY["comc"]), "-m", "comc_scanner", "scan",
+           "--era", era, "--restart", "--chase-only"]
+    if abbrevs:  # allowlist do COMC: nomes/abrevs separados por vírgula
+        cmd += ["--sets", ",".join(abbrevs)]
+    # corte de origem EXPLÍCITO (inteiro, sobre a venda): a env MIN_DISCOUNT_PERCENT do
+    # COMC não pode apertá-lo sem o integrado saber. Piso $10 = default do COMC.
+    cmd += ["--min-discount", str(COMC_MIN_DISCOUNT_PERCENT)]
+    return cmd
+
+
+def _comc_cli_rejected(log_path: Path) -> bool:
+    """True se o argparse do COMC recusou a linha de comando (exit 2 de uso, que
+    _run_step leria como "parcial"): é falha operacional, não scan interrompido."""
+    try:
+        # raiz: "comc_scanner: error:"; subparser: "comc_scanner scan: error:"
+        return bool(re.search(r"comc_scanner( \w[\w-]*)?: error:",
+                              log_path.read_text(encoding="utf-8", errors="replace")))
+    except OSError:
+        return False
+
+
+def _comc_no_coverage(log_path: Path) -> bool:
+    """True se o COMC não escaneou nada: nenhum set validado cruza a era/allowlist
+    (pipeline.run_scan loga isso, grava CSV vazio e sai 0). É falta de COBERTURA,
+    não ausência de oportunidades."""
+    try:
+        return "Nenhum set validado intersecta a era" in log_path.read_text(
+            encoding="utf-8", errors="replace")
+    except OSError:
+        return False
+
+
 def scan_comc(scope: object, stamp: str, timeout_s: int) -> tuple[str, str, float, list[Path]]:
     repo = REPOS["comc"]
     # O COMC scaneia por ERA mas aceita allowlist --sets DENTRO da era. Em modo
@@ -361,20 +397,20 @@ def scan_comc(scope: object, stamp: str, timeout_s: int) -> tuple[str, str, floa
           "de verdade (necessário pro Cloudflare). Não feche a janela.")
     t_start = time.time()  # p/ não confundir CSV deste run com sobra de run antigo
     overall, details, total_dur = "ok", [], 0.0
+    uncovered: list[str] = []
     for era, abbrevs in era_groups:
-        cmd = [str(VENV_PY["comc"]), "-m", "comc_scanner", "targeted",
-               "--era", era, "--fetch-mode", "playwright", "--no-sheets",
-               "--restart", "--chase-only"]
-        if abbrevs:  # allowlist do COMC: nomes/abbrevs separados por vírgula
-            cmd += ["--sets", ",".join(abbrevs)]
-        # corte de origem EXPLÍCITO (inteiro, sobre a venda): a env MIN_DISCOUNT_PERCENT do
-        # COMC não pode apertá-lo sem o integrado saber. Piso $10 = default do COMC.
-        cmd += ["--min-discount", str(COMC_MIN_DISCOUNT_PERCENT)]
+        cmd = _comc_cmd(era, abbrevs)
         status, detail, dur = _run_step(f"comc-{era}", cmd, repo, timeout_s,
                                         LOG_DIR / f"comc_{era}_{stamp}.log")
         total_dur += dur
+        if status == "ok" and _comc_no_coverage(LOG_DIR / f"comc_{era}_{stamp}.log"):
+            uncovered.append(era)
+            details.append(f"{era}: COMC não cobre os sets pedidos: "
+                           f"{', '.join(abbrevs) if abbrevs else 'era inteira'}")
         if status != "ok":
             overall = status
+            if _comc_cli_rejected(LOG_DIR / f"comc_{era}_{stamp}.log"):
+                overall, detail = "falhou", "falha operacional: comando COMC indisponível (CLI recusou a linha de comando)"
             details.append(f"{era}: {detail}")
     note = _skip_note(skipped, "COMC não cobre")
     if note:
@@ -387,6 +423,8 @@ def scan_comc(scope: object, stamp: str, timeout_s: int) -> tuple[str, str, floa
     outs = [p for p in latest_comc_outputs(repo)
             if any(f"comc_deals_{e}_latest" in p.name for e in scanned_eras)
             and p.stat().st_mtime >= t_start]
+    if overall == "ok" and len(uncovered) == len(era_groups):
+        return "sem cobertura", "; ".join(details), total_dur, []
     if overall == "ok" and not outs:
         summaries = comc_run_summaries(repo)
         fresh_zero = all(
@@ -638,7 +676,7 @@ def main() -> int:
                 else:
                     # CSV vazio ≠ scan ausente: o sidecar JSON com count==0
                     # prova run bem-sucedido sem deals ("ok (0 deals)").
-                    if status_obj.status != "ok (0 deals)":
+                    if status_obj.status not in ("ok (0 deals)", "sem cobertura"):
                         _mark_no_output(status_obj)
             elif src == "liga":
                 path = produced.get(src)
