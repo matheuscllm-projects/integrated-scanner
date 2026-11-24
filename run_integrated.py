@@ -5,10 +5,13 @@ caixa-preta — cada um com o PRÓPRIO venv (ambiente Python isolado) e as
 PRÓPRIAS flags canônicas — e depois unifica os outputs numa tabela única
 (normalize.py → delivery.py). NÃO edita nada dentro dos 4 repos.
 
-ATENÇÃO às convenções de threshold OPOSTAS entre as fontes (armadilha real):
-  - CardTrader e COMC: FRAÇÃO  → 0.30  (passar 30 = 3000%, zero deals!)
-  - MYP e Liga:        PERCENT → 30
-Este orquestrador já passa o valor certo pra cada um; não mexa sem ler isto.
+ATENÇÃO às convenções de threshold DIFERENTES entre as fontes (armadilha real):
+  - CardTrader:  FRAÇÃO   → 0.30 sobre a VENDA (passar 30 = 3000%, zero deals!)
+  - MYP e Liga:  PERCENT  → 30 sobre a COMPRA (= 23,1% sobre a venda)
+  - COMC:        INTEIRO  → --min-discount 20 sobre a VENDA (MIN_DISCOUNT_PERCENT = 20;
+                 a variável de ambiente do COMC pode apertar, por isso passamos 20 explícito)
+Todos são iguais ou mais frouxos que o corte de 30% sobre a venda deste integrado, que
+reaplica o corte. Este orquestrador já passa o valor certo pra cada um; não mexa sem ler isto.
 
 Uso típico:
   python run_integrated.py --profile quick                  # principais sets SV
@@ -96,6 +99,16 @@ TIMEOUTS = {
 # passo à parte: se estourar, a Liga vira "timeout (coleta)" mas o run continua
 # com as outras fontes (isolamento — uma fonte frágil não derruba a entrega).
 LIGA_COLLECT_TIMEOUT = 90 * 60
+
+# Corte de ORIGEM de cada fonte (o que ela mesma filtra antes do integrado). Aparece no
+# resumo por fonte; o corte do integrado (30% sobre a venda) é reaplicado por cima.
+COMC_MIN_DISCOUNT_PERCENT = 20   # inteiro, sobre a venda (padrão do scanner COMC)
+ORIGIN_CUTS = {
+    "myp": "30% sobre a compra (--threshold 30) = 23,1% sobre a venda",
+    "ct": "30% sobre a venda (--threshold 0.30, fração)",
+    "comc": f"{COMC_MIN_DISCOUNT_PERCENT}% sobre a venda (--min-discount {COMC_MIN_DISCOUNT_PERCENT}, inteiro)",
+    "liga": "30% sobre a compra (pipeline da Liga) = 23,1% sobre a venda",
+}
 
 
 def source_timeout(source: str, scope: object, override: int | None = None) -> int:
@@ -354,7 +367,9 @@ def scan_comc(scope: object, stamp: str, timeout_s: int) -> tuple[str, str, floa
                "--restart", "--chase-only"]
         if abbrevs:  # allowlist do COMC: nomes/abbrevs separados por vírgula
             cmd += ["--sets", ",".join(abbrevs)]
-        # margem default do COMC já é 0.30 (FRAÇÃO) + piso $10 — canônicos.
+        # corte de origem EXPLÍCITO (inteiro, sobre a venda): a env MIN_DISCOUNT_PERCENT do
+        # COMC não pode apertá-lo sem o integrado saber. Piso $10 = default do COMC.
+        cmd += ["--min-discount", str(COMC_MIN_DISCOUNT_PERCENT)]
         status, detail, dur = _run_step(f"comc-{era}", cmd, repo, timeout_s,
                                         LOG_DIR / f"comc_{era}_{stamp}.log")
         total_dur += dur
@@ -664,6 +679,11 @@ def main() -> int:
             status_obj.status = "falhou (normalização)"
             status_obj.detail = f"{type(exc).__name__}: {exc}"
             traceback.print_exc(file=sys.stderr)
+
+    for s in statuses:
+        s.origin_cut = ORIGIN_CUTS.get(s.source.lower(), "")
+        if args.skip_scan and s.origin_cut:
+            s.origin_cut += " (releitura: corte real do arquivo desconhecido)"
 
     # ── fase 3: entrega ─────────────────────────────────────────────────
     visible = [d for d in deals if not args.notorious_only or d.notorio]

@@ -92,9 +92,13 @@ métrica SEPARADA (coluna "ROI aquisição %"), só informativa, nunca no corte:
 sobre a venda equivale a 42,86% de ROI, e 30% de ROI equivale a só 23,08% de margem.
 Ex.: compra 75, referência 100 → ROI 33,3%, margem 25%: NÃO passa o corte. Preço de compra
 ou referência ausente/zero → sem número ("—") e bucket "Rejeitados / sem referência",
-nunca margem calculada com zero. As fontes mantêm seus cortes próprios (MYP e Liga: 30%
-sobre a compra, mais frouxos que o do integrado, portanto nada que passa aqui é perdido
-na fonte); o integrado reaplica o corte sobre a venda. CT também exporta
+nunca margem calculada com zero. As fontes mantêm seus cortes próprios, registrados por
+fonte no resumo ("corte de origem"): MYP e Liga 30% sobre a compra (= 23,1% sobre a venda);
+CT 30% sobre a venda (`--threshold 0.30`, fração; igual ao do integrado); COMC
+`MIN_DISCOUNT_PERCENT = 20`, inteiro, sobre a venda (o integrado passa `--min-discount 20`
+explícito, pois a variável de ambiente do COMC poderia apertá-lo sem ele saber). Todos
+são iguais ou mais frouxos que 30% sobre a venda, portanto nada que passa aqui é perdido
+na fonte; o integrado reaplica o corte sobre a venda. CT também exporta
 linhas abaixo do seu corte, que permanecem identificadas e sem validação automática.
 Nenhuma taxa é embutida. Diferença bruta não é lucro líquido.
 O USD original e o câmbio implícito do MYP/CT são preservados.

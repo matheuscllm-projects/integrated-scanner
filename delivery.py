@@ -37,6 +37,7 @@ class SourceStatus:
     output_path: str = ""
     collected_at: str = ""
     mode: str = "scan"
+    origin_cut: str = ""        # corte que a própria fonte aplicou antes do integrado
 
 
 def filter_deals(deals: list[Deal],
@@ -118,7 +119,7 @@ def build_markdown(deals: list[Deal],
         out = Path(s.output_path).name if s.output_path else "—"
         lines.append(
             f"| {s.source} | {s.status} | {s.deals_raw} | {s.deals_kept} "
-            f"| {dur} | {_md_escape(out)} | {_md_escape('; '.join(filter(None, [s.detail, s.collected_at, s.mode]))) or '—'} |")
+            f"| {dur} | {_md_escape(out)} | {_md_escape('; '.join(filter(None, [s.detail, s.collected_at, s.mode, ('corte de origem: ' + s.origin_cut) if s.origin_cut else '']))) or '—'} |")
     lines.append("")
     if outcome:
         lines += [f"**{outcome}**", ""]
