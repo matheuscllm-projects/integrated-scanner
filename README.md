@@ -19,7 +19,7 @@ Cada fonte precisa do seu repositório, dependências e credenciais. Veja
 - MYP com intervalo de 3 segundos entre consultas, configurável por `--myp-delay`.
   O limite de execução cresce com o número de filtros de edição (Grupo 2: 7 horas);
   `--timeout` permite escolher outro limite. Isso não é uma previsão de duração.
-- Margem bruta, sem taxas; o scanner não decide compras.
+- Margem bruta sobre a venda ((referência − compra) ÷ referência), sem taxas, é a base do corte de 30%; ROI sobre a compra aparece à parte; o scanner não decide compras.
 
 [DELIVERY_CHAT.md](DELIVERY_CHAT.md) rege a entrega: resultados no chat,
 nunca publicados no GitHub. CI e testes usam somente dados sintéticos.

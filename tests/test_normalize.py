@@ -8,7 +8,7 @@ sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 
 from normalize import (UNIFIED_COLUMNS, classify_chase_tier, clean_myp_edition,
                        comc_row_to_deal, comc_run_summaries,
-                       compute_valorization, ct_row_to_deal, gross_margin_pct,
+                       compute_valorization, ct_row_to_deal, sale_margin_pct, roi_pct,
                        liga_row_to_deal, myp_row_to_deal)
 
 FX = 5.20
@@ -51,16 +51,18 @@ LIGA_ROW = {
 }
 
 
-def test_gross_margin_base_is_purchase():
-    # (revenda − compra)/compra: 100→150 = +50%
-    assert gross_margin_pct(150.0, 100.0) == pytest.approx(50.0)
-    assert gross_margin_pct(100.0, 0.0) == 0.0  # sem divisão por zero
+def test_margin_base_is_sale_and_roi_is_separate():
+    # compra 100 / referência 150: margem sobre a venda 33,3%; ROI 50%
+    assert sale_margin_pct(150.0, 100.0) == pytest.approx(33.333, abs=1e-2)
+    assert roi_pct(150.0, 100.0) == pytest.approx(50.0)
+    assert sale_margin_pct(100.0, 0.0) is None  # sem preço → sem número, nunca 0
 
 
-def test_ct_margin_recomputed_over_purchase():
+def test_ct_margin_recomputed_over_sale():
     d = ct_row_to_deal(CT_ROW, FX)
-    # CT reportava 35.66% (base revenda); unificado = (96.24−61.92)/61.92
-    assert d.margem_pct == pytest.approx(55.43, abs=0.05)
+    # CT reportava 35.66% (base revenda) = (96.24−61.92)/96.24; ROI = 55.43%
+    assert d.margem_venda_pct == pytest.approx(35.66, abs=0.05)
+    assert d.roi_aquisicao_pct == pytest.approx(55.43, abs=0.05)
     assert d.compra_brl == 61.92          # usa LIVE (validado), não o raw
     assert d.fx == pytest.approx(96.24 / 18.64, abs=0.001)  # FX implícito da linha
     assert d.qtd == 1
@@ -78,8 +80,9 @@ def test_myp_number_extracted_and_margin_recomputed():
     d = myp_row_to_deal(MYP_ROW, FX)
     assert d.carta == "Mega Gengar ex"
     assert d.numero == "269"
-    # (446−250)/250 = 78.4% — bate com a própria convenção do MYP
-    assert d.margem_pct == pytest.approx(78.4, abs=0.05)
+    # margem sobre a venda (446−250)/446 = 43.95%; o MYP reportava 78.4% = ROI
+    assert d.margem_venda_pct == pytest.approx(43.95, abs=0.05)
+    assert d.roi_aquisicao_pct == pytest.approx(78.4, abs=0.05)
     assert d.qtd is None                  # MYP não informa estoque
     assert d.valorizacao is not None      # heurística portada preenche
     assert d.notorio.startswith("⭐")      # Gengar é notório
@@ -90,8 +93,9 @@ def test_comc_usd_converted_with_global_fx():
     d = comc_row_to_deal(COMC_ROW, FX)
     assert d.compra_usd == 12.32
     assert d.compra_brl == pytest.approx(12.32 * FX)
-    # (14.27−12.32)/12.32 = 15.83% (a fonte dizia 13.67% base revenda)
-    assert d.margem_pct == pytest.approx(15.83, abs=0.05)
+    # (14.27−12.32)/14.27 = 13.67% (= o que a fonte diz); ROI 15.83%
+    assert d.margem_venda_pct == pytest.approx(13.67, abs=0.05)
+    assert d.roi_aquisicao_pct == pytest.approx(15.83, abs=0.05)
     assert d.qtd == 7
     assert d.chase_tier == "TOP"          # Illustration Rare
 
@@ -99,7 +103,9 @@ def test_comc_usd_converted_with_global_fx():
 def test_liga_uses_row_exchange_rate():
     d = liga_row_to_deal(LIGA_ROW, 99.0)  # fx global absurdo de propósito
     assert d.fx == 5.2                    # linha ganha do global
-    assert d.margem_pct == pytest.approx(58.89, abs=0.05)
+    # Liga reportava 58.89% = ROI ((286−180)/180); margem sobre a venda 37.06%
+    assert d.roi_aquisicao_pct == pytest.approx(58.89, abs=0.05)
+    assert d.margem_venda_pct == pytest.approx(37.06, abs=0.05)
     assert d.notorio == "⭐ Charizard"
 
 

@@ -22,9 +22,9 @@ from normalize import Deal
 
 
 def _deal(fonte, carta, set_name, numero="", compra_brl=100.0, ref_brl=150.0,
-          margem_pct=50.0, link_oferta="", link_tcg=""):
+          link_oferta="", link_tcg=""):
     return Deal(fonte=fonte, carta=carta, set_name=set_name, numero=numero,
-                compra_brl=compra_brl, ref_brl=ref_brl, margem_pct=margem_pct,
+                compra_brl=compra_brl, ref_brl=ref_brl,
                 link_oferta=link_oferta, link_tcg=link_tcg,
                 variant="holofoil", condition="NM", language="EN", price_status="real")
 
@@ -81,9 +81,9 @@ def test_canonical_set_unknown_is_none():
 def test_same_card_by_number_across_sources_no_flag():
     deals = [
         _deal("MYP", "Umbreon ex (161/131)", "Prismatic Evolutions", "161",
-              compra_brl=900.0, ref_brl=1200.0, margem_pct=33.3),
+              compra_brl=900.0, ref_brl=1200.0),
         _deal("CardTrader", "Umbreon ex", "pre", "161",
-              compra_brl=850.0, ref_brl=1200.0, margem_pct=41.2),
+              compra_brl=850.0, ref_brl=1200.0),
     ]
     cards = group_cross_source(deals)
     assert len(cards) == 1
@@ -226,15 +226,15 @@ def test_different_numbers_same_name_not_merged():
 
 def test_sorted_by_cheapest_buy_margin_desc():
     deals = [
-        # carta A: mais barata = COMC com margem ~50%
-        _deal("MYP", "Sylveon ex", "Surging Sparks", "86", compra_brl=200, ref_brl=260, margem_pct=30),
-        _deal("COMC", "Sylveon ex", "Surging Sparks", "86", compra_brl=180, ref_brl=270, margem_pct=50),
-        # carta B: mais barata = CardTrader com margem ~100%
-        _deal("MYP", "Latias ex", "Surging Sparks", "76", compra_brl=100, ref_brl=180, margem_pct=80),
-        _deal("CardTrader", "Latias ex", "Surging Sparks", "76", compra_brl=90, ref_brl=180, margem_pct=100),
+        # carta A: mais barata = COMC com margem sobre a venda ~33%
+        _deal("MYP", "Sylveon ex", "Surging Sparks", "86", compra_brl=200, ref_brl=260),
+        _deal("COMC", "Sylveon ex", "Surging Sparks", "86", compra_brl=180, ref_brl=270),
+        # carta B: mais barata = CardTrader com margem sobre a venda 50%
+        _deal("MYP", "Latias ex", "Surging Sparks", "76", compra_brl=100, ref_brl=180),
+        _deal("CardTrader", "Latias ex", "Surging Sparks", "76", compra_brl=90, ref_brl=180),
     ]
     cards = group_cross_source(deals)
-    assert [c.display_name for c in cards][0].startswith("Latias")  # 100% antes de 50%
+    assert [c.display_name for c in cards][0].startswith("Latias")  # 50% antes de 33%
 
 
 # ── tabela de entrega ───────────────────────────────────────────────────────
@@ -245,11 +245,11 @@ def test_markdown_empty_when_no_cross_source():
 def test_markdown_lays_prices_side_by_side_and_marks_cheapest():
     deals = [
         _deal("MYP", "Umbreon ex (161/131)", "Prismatic Evolutions", "161",
-              compra_brl=900.0, ref_brl=1200.0, margem_pct=33.3,
+              compra_brl=900.0, ref_brl=1200.0,
               link_oferta="https://mypcards.com/u", link_tcg="https://tcg/u"),
         # CardTrader é a MAIS BARATA (850) → a célula Links usa os links dela
         _deal("CardTrader", "Umbreon ex", "pre", "161",
-              compra_brl=850.0, ref_brl=1200.0, margem_pct=41.2,
+              compra_brl=850.0, ref_brl=1200.0,
               link_oferta="https://cardtrader.com/u", link_tcg="https://tcg/ct-u"),
     ]
     md = build_cross_source_markdown(group_cross_source(deals))

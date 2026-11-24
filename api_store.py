@@ -27,7 +27,7 @@ HERE = Path(__file__).resolve().parent
 OUT_DIR = HERE / "outputs"
 STORE_PATH = OUT_DIR / "deals_store.json"
 
-SCHEMA_VERSION = 1
+SCHEMA_VERSION = 2  # v2: margem_venda_pct + roi_aquisicao_pct (campo único antigo removido)
 
 
 def _now_utc_iso() -> str:
@@ -46,11 +46,14 @@ def build_store(deals: list, statuses: list, *, scope: Any, fx: float,
         "stamp": stamp,
         "scope": scope,                  # lista de códigos canônicos OU "full"
         "fx": round(float(fx), 4),
-        "min_margin_pct": float(min_margin),
+        "min_margem_venda_pct": float(min_margin),
         "notorious_only": bool(notorious_only),
         "deal_count": len(deals),
         "sources": [asdict(s) for s in statuses],
-        "deals": [dict(asdict(d), bucket=bucket_for(d, min_margin)) for d in deals],
+        # margem/ROI são propriedades derivadas dos preços (asdict não as inclui).
+        "deals": [dict(asdict(d), margem_venda_pct=d.margem_venda_pct,
+                       roi_aquisicao_pct=d.roi_aquisicao_pct,
+                       bucket=bucket_for(d, min_margin)) for d in deals],
     }
 
 

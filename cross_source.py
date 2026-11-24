@@ -289,7 +289,9 @@ class CrossSourceCard:
     @property
     def best_margin(self) -> float:
         """Maior margem entre as fontes (a melhor oportunidade da carta)."""
-        return max(d.margem_pct for d in self.deals_by_source.values())
+        vals = [d.margem_venda_pct for d in self.deals_by_source.values()
+                if d.margem_venda_pct is not None]
+        return max(vals) if vals else 0.0
 
 
 def _source_sort_key(fonte: str) -> tuple[int, str]:
@@ -457,5 +459,5 @@ def group_cross_source(deals: list[Deal]) -> list[CrossSourceCard]:
 
     # ordena pela margem da COMPRA MAIS BARATA (a oportunidade acionável: é o
     # número que a tabela exibe — comprar onde está mais barato).
-    cards.sort(key=lambda c: c.cheapest_deal.margem_pct, reverse=True)
+    cards.sort(key=lambda c: c.cheapest_deal.margem_venda_pct or 0.0, reverse=True)
     return cards

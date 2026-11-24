@@ -5,14 +5,18 @@ diferentes). Este módulo traduz tudo pra UMA tabela com as mesmas colunas.
 
 DECISÕES DE DESIGN (documentadas porque as fontes divergem):
 
-1. MARGEM BRUTA UNIFICADA = (revenda − compra) / compra, em PERCENT.
-   "Revenda" = preço de referência no TCGPlayer; "compra" = preço na fonte.
-   Por que recomputar? Cada scanner usa uma base diferente:
-     - MYP e Liga dividem pela COMPRA  (lucro sobre o capital investido)
-     - CardTrader e COMC dividem pela REVENDA
-   Dividir pela compra é a leitura mais intuitiva ("ganho X% sobre o que
-   paguei") e é matematicamente ≥ à margem-sobre-revenda — ou seja, nenhum
-   deal que passou no threshold de 30% da própria fonte é descartado aqui.
+1. MARGEM SOBRE A VENDA = (referência − compra) / referência, em PERCENT.
+   "Referência" = preço de mercado no TCGPlayer; "compra" = preço na fonte.
+   É a ÚNICA base do corte de 30% (decisão do dono: padronizar sobre a venda).
+   ROI sobre a aquisição = (referência − compra) / compra é uma métrica
+   SEPARADA (`roi_pct` / coluna "ROI aquisição %"), exibida à parte e NUNCA
+   usada no corte: 30% de margem sobre a venda ≠ 30% de ROI (equivale a
+   42,86% de ROI). Cada scanner usa uma base diferente (MYP e Liga: compra;
+   CardTrader e COMC: venda), por isso recomputamos aqui dos preços brutos.
+   Os dois números são sempre DERIVADOS dos preços da linha (propriedades de
+   `Deal`), nunca armazenados à parte — não há como divergirem do preço.
+   Preço de compra ou referência ausente/zero → None ("sem referência"),
+   nunca uma margem calculada com zero.
 
 2. FX (câmbio USD→BRL) é EXPLÍCITO por linha (coluna FX):
      - CardTrader: implícito na própria linha (TCG BRL ÷ TCG USD)
@@ -47,7 +51,7 @@ FX_FALLBACK = 5.20  # último recurso, documentado; prefira --fx ou inferência 
 UNIFIED_COLUMNS = [
     "Fonte", "Carta", "Set", "Nº", "Raridade", "Chase Tier", "Notório",
     "Compra (R$)", "Compra (US$)", "FX", "Ref TCG (R$)", "Ref TCG (US$)",
-    "Margem bruta %", "Lucro (R$)", "Qtd",
+    "Margem venda %", "ROI aquisição %", "Lucro (R$)", "Qtd",
     "Notas", "Link oferta", "Link TCG",
     "Variante", "Condição", "Idioma", "Fonte preço", "Status referência",
     "Validação", "Coletado em", "Revisão",
@@ -68,7 +72,6 @@ class Deal:
     fx: float = 0.0
     ref_brl: float = 0.0
     ref_usd: float = 0.0
-    margem_pct: float = 0.0      # percent, base = compra (ver docstring)
     lucro_brl: float = 0.0
     qtd: Optional[int] = None    # None = fonte não informa
     valorizacao: Optional[int] = None
@@ -84,7 +87,18 @@ class Deal:
     scanned_at: str = ""
     review_reasons: list[str] = field(default_factory=list)
 
+    @property
+    def margem_venda_pct(self) -> Optional[float]:
+        """Margem sobre a venda (percent) — a base do corte. None = sem preços."""
+        return sale_margin_pct(self.ref_brl, self.compra_brl)
+
+    @property
+    def roi_aquisicao_pct(self) -> Optional[float]:
+        """ROI sobre a aquisição (percent) — métrica separada, nunca no corte."""
+        return roi_pct(self.ref_brl, self.compra_brl)
+
     def to_row(self) -> dict[str, Any]:
+        margem, roi = self.margem_venda_pct, self.roi_aquisicao_pct
         return {
             "Fonte": self.fonte,
             "Carta": self.carta,
@@ -98,7 +112,8 @@ class Deal:
             "FX": round(self.fx, 3) if self.fx else "",
             "Ref TCG (R$)": round(self.ref_brl, 2),
             "Ref TCG (US$)": round(self.ref_usd, 2),
-            "Margem bruta %": round(self.margem_pct, 1),
+            "Margem venda %": round(margem, 1) if margem is not None else "",
+            "ROI aquisição %": round(roi, 1) if roi is not None else "",
             "Lucro (R$)": round(self.lucro_brl, 2),
             "Qtd": self.qtd if self.qtd is not None else "—",
             "Notas": "; ".join(self.notas),
@@ -138,10 +153,26 @@ def _clean_str(value: Any) -> str:
     return "" if s.lower() == "nan" else s
 
 
-def gross_margin_pct(ref_brl: float, compra_brl: float) -> float:
-    """Margem bruta unificada: (revenda − compra)/compra ×100. Zero taxas."""
-    if compra_brl <= 0:
-        return 0.0
+def _valid_prices(ref_brl: float, compra_brl: float) -> bool:
+    return all(isinstance(v, (int, float)) and math.isfinite(v) and v > 0
+               for v in (ref_brl, compra_brl))
+
+
+def sale_margin_pct(ref_brl: float, compra_brl: float) -> Optional[float]:
+    """Margem sobre a VENDA: (referência − compra)/referência ×100. Zero taxas.
+
+    ÚNICA função de margem do ecossistema integrado; é ela que alimenta o corte
+    de 30%. None quando falta preço (nunca devolve margem calculada com zero)."""
+    if not _valid_prices(ref_brl, compra_brl):
+        return None
+    return (ref_brl - compra_brl) / ref_brl * 100.0
+
+
+def roi_pct(ref_brl: float, compra_brl: float) -> Optional[float]:
+    """ROI sobre a AQUISIÇÃO: (referência − compra)/compra ×100. Só informativo:
+    nunca entra no corte nem substitui a margem sobre a venda."""
+    if not _valid_prices(ref_brl, compra_brl):
+        return None
     return (ref_brl - compra_brl) / compra_brl * 100.0
 
 
@@ -284,7 +315,6 @@ def ct_row_to_deal(row: dict[str, Any], fx_global: float) -> Deal:
         fx=fx,
         ref_brl=ref_brl,
         ref_usd=ref_usd,
-        margem_pct=gross_margin_pct(ref_brl, compra_brl),
         lucro_brl=ref_brl - compra_brl,
         qtd=int(_num(_col(row, "Qtd"), 0)) or None,
         link_oferta=str(_col(row, "Link CardTrader") or ""),
@@ -387,7 +417,6 @@ def myp_row_to_deal(row: dict[str, Any], fx_global: float) -> Deal:
         fx=fx,
         ref_brl=ref_brl,
         ref_usd=ref_usd,
-        margem_pct=gross_margin_pct(ref_brl, compra_brl),
         lucro_brl=ref_brl - compra_brl,
         qtd=None,  # MYP não informa estoque da oferta mais barata
         valorizacao=score,
@@ -462,7 +491,6 @@ def comc_row_to_deal(row: dict[str, Any], fx_global: float) -> Deal:
         fx=fx,
         ref_brl=ref_brl,
         ref_usd=ref_usd,
-        margem_pct=gross_margin_pct(ref_brl, compra_brl),
         lucro_brl=ref_brl - compra_brl,
         qtd=int(_num(_col(row, "quantity"), 0)) or None,
         valorizacao=score,
@@ -502,7 +530,6 @@ def liga_row_to_deal(row: dict[str, Any], fx_global: float) -> Deal:
         fx=fx,
         ref_brl=ref_brl,
         ref_usd=ref_usd,
-        margem_pct=gross_margin_pct(ref_brl, compra_brl),
         lucro_brl=ref_brl - compra_brl,
         qtd=None,
         valorizacao=score,

@@ -53,22 +53,26 @@ def test_actual_ct_export_normalization_and_matching(tmp_path):
 
 def test_unvalidated_near_miss_is_never_clean():
     d = ct_row_to_deal(ct_row(**{'Scan R$ (raw)': 150, 'Validation Status': 'NOT_VALIDATED'}), 5)
-    assert d.margem_pct > 30  # CT discount is <30, unified ROI is >30
-    assert bucket_for(d) == 'Validar manualmente'
+    # compra 150 / ref 200: margem sobre a venda 25% (<30) — o ROI 33% NÃO conta
+    assert d.margem_venda_pct == pytest.approx(25.0) and d.roi_aquisicao_pct > 30
+    assert bucket_for(d).startswith('Abaixo do corte')
+    d2 = ct_row_to_deal(ct_row(**{'Scan R$ (raw)': 120, 'Validation Status': 'NOT_VALIDATED'}), 5)
+    assert d2.margem_venda_pct == pytest.approx(40.0)
+    assert bucket_for(d2) == 'Validar manualmente'
 
 
 def test_delivery_retains_all_buckets_and_missing_price():
     clean = ct_row_to_deal(ct_row(**{'Variante Baixa Confiança': ''}), 5)
     missing = Deal(fonte='MYP', carta='No price', compra_brl=50)
     fallback = Deal(fonte='MYP', carta='Estimated', compra_brl=50, ref_brl=100,
-                    margem_pct=100, price_status='fallback')
+                    price_status='fallback')
     low = ct_row_to_deal(ct_row(**{'Scan R$ (raw)': 210}), 5)
     md = build_markdown([clean, missing, fallback, low], [], 5)
     assert 'Eevee 074' in md and '| Carta | Set |' in md
     assert '[40.00](https://example.org/reference)' in md
     assert 'Fallback — margem estimada' in md and 'Abaixo do corte' in md
     no_price_row = next(x for x in md.splitlines() if '| No price |' in x)
-    assert [c.strip() for c in no_price_row.split('|')][5:8] == ['—', '—', '—']
+    assert [c.strip() for c in no_price_row.split('|')][6:9] == ['—', '—', '—']
     assert md.count('[oferta]') == 2
 
 

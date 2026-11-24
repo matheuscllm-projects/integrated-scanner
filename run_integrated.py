@@ -47,7 +47,7 @@ if hasattr(sys.stdout, "reconfigure"):
 from normalize import (REPOS, FX_FALLBACK, comc_run_summaries, infer_fx_from_ct,
                        latest_ct_output, latest_comc_outputs, latest_myp_output,
                        read_comc, read_ct, read_liga, read_myp)
-from delivery import (MIN_MARGIN_PCT_DEFAULT, SourceStatus,
+from delivery import (MIN_MARGEM_VENDA_PCT_DEFAULT, SourceStatus,
                       build_cross_source_markdown, build_markdown,
                       filter_deals, write_xlsx)
 from cross_source import group_cross_source
@@ -429,8 +429,8 @@ def main() -> int:
                     help="fontes, separadas por vírgula (myp,ct,comc,liga)")
     ap.add_argument("--skip-scan", action="store_true",
                     help="NÃO roda scanners; só normaliza os outputs já existentes")
-    ap.add_argument("--min-margin", type=float, default=MIN_MARGIN_PCT_DEFAULT,
-                    help="corte unificado em percent sobre a compra; fontes preservam seus cortes próprios. Linhas abaixo do corte ficam no diagnóstico.")
+    ap.add_argument("--min-margin", type=float, default=MIN_MARGEM_VENDA_PCT_DEFAULT,
+                    help="corte unificado em percent de MARGEM SOBRE A VENDA ((ref − compra)/ref), nunca ROI; fontes preservam seus cortes próprios. Linhas abaixo do corte ficam no diagnóstico.")
     ap.add_argument("--notorious-only", action="store_true",
                     help="só cartas de Pokémon notórios (lista curada)")
     ap.add_argument("--fx", type=float, default=None,

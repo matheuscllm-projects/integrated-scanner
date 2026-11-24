@@ -65,7 +65,7 @@ COMC/Liga precisam de validação específica no ambiente de navegador do operad
 
 ## Formato MyP Cards
 
-A tabela compacta apresenta número da linha, fonte, margem, compra R$,
+A tabela compacta apresenta número da linha, fonte, margem venda %, ROI aquisição %, compra R$,
 referência US$/R$, diferença R$, carta com número, set, raridade, condição,
 quantidade, flags e os dois links. O preço de referência é clicável.
 Não substituir preço ou evidência ausente por zero, busca genérica ou outra carta.
@@ -84,9 +84,17 @@ match único, referência da versão mais barata) vai para Validar manualmente.
 CT preserva variante, idioma, condição, procedência, horário e validação.
 Linhas CT não validadas não viram deals limpos por passar apenas no corte numérico.
 
-As fórmulas originais das fontes não mudam: MYP usa 30% sobre a compra;
-CT usa 0,30 sobre a referência. O integrado recalcula `(referência-compra)/compra`.
-30% sobre a referência equivale a 42,86% sobre a compra. CT também exporta
+**Margem e ROI (decisão do dono, padrão do ecossistema):** o integrado recalcula tudo dos
+preços da linha, com UMA função (`normalize.sale_margin_pct`). **Margem sobre a venda =
+`(referência − compra) / referência`** e é a única base do corte de 30% (coluna
+"Margem venda %"). **ROI sobre a aquisição = `(referência − compra) / compra`** é uma
+métrica SEPARADA (coluna "ROI aquisição %"), só informativa, nunca no corte: 30% de margem
+sobre a venda equivale a 42,86% de ROI, e 30% de ROI equivale a só 23,08% de margem.
+Ex.: compra 75, referência 100 → ROI 33,3%, margem 25%: NÃO passa o corte. Preço de compra
+ou referência ausente/zero → sem número ("—") e bucket "Rejeitados / sem referência",
+nunca margem calculada com zero. As fontes mantêm seus cortes próprios (MYP e Liga: 30%
+sobre a compra, mais frouxos que o do integrado, portanto nada que passa aqui é perdido
+na fonte); o integrado reaplica o corte sobre a venda. CT também exporta
 linhas abaixo do seu corte, que permanecem identificadas e sem validação automática.
 Nenhuma taxa é embutida. Diferença bruta não é lucro líquido.
 O USD original e o câmbio implícito do MYP/CT são preservados.
