@@ -426,6 +426,9 @@ def ct_row_to_deal(row: dict[str, Any], fx_global: float) -> Deal:
         deal.review_reasons.append("variante de baixa confiança na fonte")
     if deal.validation_status not in {"VALIDATED_REAL", "VALIDATED_MARKUP"}:
         deal.review_reasons.append("oferta CT sem validação atual: " + (deal.validation_status or "não informada"))
+    elif live <= 0:  # VALIDATED_* sem LIVE (ex.: API mudou): nunca presumir o raw como checkout
+        deal.review_reasons.append("preço de checkout não validado (LIVE ausente)")
+        deal.notas.append("margem sobre preço NÃO validado (Scan R$ raw, sem LIVE)")
     _flag_notorious(deal)
     _flag_missing_prices(deal)
     return deal
