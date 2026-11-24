@@ -181,17 +181,22 @@ def deals(
         canon = {e["canonical"]: e["name"] for e in catalog()}
         key = canon.get(raw.upper(), raw).lower()
         rows = [d for d in rows if key in (d.get("set_name") or "").lower()]
-    if min_margin is not None:
-        rows = [d for d in rows if float(d.get("margem_venda_pct") or 0) >= min_margin]
     if notorious:
         rows = [d for d in rows if (d.get("notorio") or "").strip()]
     if q:
         needle = q.strip().lower()
         rows = [d for d in rows if needle in (d.get("carta") or "").lower()]
 
-    rows.sort(key=lambda d: float(d.get("margem_venda_pct") or 0), reverse=True)
+    # Linha sem margem (sem preço de compra/referência) nunca passa em filtro de margem
+    # e nunca é tratada como 0: vai para o fim da ordenação, e a resposta conta quantas são.
+    sem_margem = sum(1 for d in rows if d.get("margem_venda_pct") is None)
+    if min_margin is not None:
+        rows = [d for d in rows if d.get("margem_venda_pct") is not None
+                and d["margem_venda_pct"] >= min_margin]
+    rows.sort(key=lambda d: (d.get("margem_venda_pct") is None, -(d.get("margem_venda_pct") or 0.0)))
     return {
         "count": len(rows),
+        "sem_margem": sem_margem,
         "generated_utc": store.get("generated_utc"),
         "scope": store.get("scope"),
         "fx": store.get("fx"),
